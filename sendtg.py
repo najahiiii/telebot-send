@@ -14,8 +14,9 @@ from telegram import (
     InputMediaVideo,
 )
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 
-from config import DEFAULT_CHAT_ID, DEFAULT_BOT_TOKEN
+from config import DEFAULT_CHAT_ID, DEFAULT_BOT_TOKEN, URL, VERSION
 from utils.logger import logger as log
 
 
@@ -54,7 +55,20 @@ class SendTg:
         """
         self.bot_token = bot_token or DEFAULT_BOT_TOKEN
         self.chat_id = chat_id or DEFAULT_CHAT_ID
-        self.bot = Bot(token=self.bot_token)
+
+        if not self.bot_token:
+            log.error("Bot token is required!")
+            raise ValueError("Bot token is missing!")
+
+        try:
+            self.bot = Bot(token=self.bot_token)
+        except TelegramError as e:
+            log.error("Failed to initialize bot: %s", e)
+            sys.exit("Error initializing bot with the provided token.")
+
+        if not self.chat_id:
+            log.error("Chat ID is required!")
+            raise ValueError("Chat ID is missing!")
 
     async def send_chat_action(self, chat_id, media_path, as_file=False):
         """
@@ -73,14 +87,21 @@ class SendTg:
             - "upload_photo" if the media is an image (png, jpg, jpeg, gif).
             - "upload_video" if the media is a video (mp4, mov, avi).
         """
-        if as_file:
-            await self.bot.send_chat_action(chat_id=chat_id, action="upload_document")
-        elif media_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-            await self.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-        elif media_path.lower().endswith((".mp4", ".mov", ".avi")):
-            await self.bot.send_chat_action(chat_id=chat_id, action="upload_video")
-        else:
-            await self.bot.send_chat_action(chat_id=chat_id, action="upload_document")
+        try:
+            if as_file:
+                await self.bot.send_chat_action(
+                    chat_id=chat_id, action="upload_document"
+                )
+            elif media_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                await self.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+            elif media_path.lower().endswith((".mp4", ".mov", ".avi")):
+                await self.bot.send_chat_action(chat_id=chat_id, action="upload_video")
+            else:
+                await self.bot.send_chat_action(
+                    chat_id=chat_id, action="upload_document"
+                )
+        except TelegramError as e:
+            log.error("Error sending chat action: %s", e)
 
     async def send_message(self, chat_id, message, reply_markup=None):
         """
@@ -98,14 +119,18 @@ class SendTg:
         Logs:
             Logs the chat ID and message content after sending the message.
         """
-        await self.bot.send_chat_action(chat_id=chat_id, action="typing")
-        await self.bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
-        )
-        log.info("Message sent to chat ID %s: %s", chat_id, message)
+        try:
+            await self.bot.send_chat_action(chat_id=chat_id, action="typing")
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+            )
+            log.info("Message sent to chat ID %s: %s", chat_id, message)
+        except TelegramError as e:
+            log.error("Failed to send message: %s", e)
+            sys.exit("Error sending message.")
 
     async def send_media(self, chat_id, media_paths, caption=None, as_file=False):
         """
@@ -133,69 +158,83 @@ class SendTg:
             if os.path.isfile(media_path):
                 await self.send_chat_action(chat_id, media_path, as_file=as_file)
 
-                if as_file:
-                    with open(media_path, "rb") as file:
-                        await self.bot.send_document(
-                            chat_id=chat_id,
-                            document=file,
-                            caption=caption,
-                            filename=os.path.basename(media_path),
-                            disable_content_type_detection=True,
+                try:
+                    if as_file:
+                        with open(media_path, "rb") as file:
+                            await self.bot.send_document(
+                                chat_id=chat_id,
+                                document=file,
+                                caption=caption,
+                                filename=os.path.basename(media_path),
+                                disable_content_type_detection=True,
+                            )
+                        log.info(
+                            "Album sent as file to chat ID %s: %s", chat_id, media_path
                         )
-                    log.info(
-                        "Album sent as file to chat ID %s: %s", chat_id, media_path
-                    )
-                elif media_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                    with open(media_path, "rb") as file:
-                        media_item = InputMediaPhoto(media=file, caption=caption)
-                        media_group.append((media_item, os.path.basename(media_path)))
-                elif media_path.lower().endswith((".mp4", ".mov", ".avi")):
-                    with open(media_path, "rb") as file:
-                        media_item = InputMediaVideo(media=file, caption=caption)
-                        media_group.append((media_item, os.path.basename(media_path)))
-                else:
-                    with open(media_path, "rb") as file:
-                        await self.bot.send_document(
-                            chat_id=chat_id,
-                            document=file,
-                            caption=caption,
-                            filename=os.path.basename(media_path),
-                            disable_content_type_detection=True,
-                        )
-                    log.info("File sent to chat ID %s: %s", chat_id, media_path)
+                    elif media_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                        with open(media_path, "rb") as file:
+                            media_item = InputMediaPhoto(media=file, caption=caption)
+                            media_group.append(
+                                (media_item, os.path.basename(media_path))
+                            )
+                    elif media_path.lower().endswith((".mp4", ".mov", ".avi")):
+                        with open(media_path, "rb") as file:
+                            media_item = InputMediaVideo(media=file, caption=caption)
+                            media_group.append(
+                                (media_item, os.path.basename(media_path))
+                            )
+                    else:
+                        with open(media_path, "rb") as file:
+                            await self.bot.send_document(
+                                chat_id=chat_id,
+                                document=file,
+                                caption=caption,
+                                filename=os.path.basename(media_path),
+                                disable_content_type_detection=True,
+                            )
+                        log.info("File sent to chat ID %s: %s", chat_id, media_path)
+                except TelegramError as e:
+                    log.error("Failed to send media: %s", e)
             else:
                 log.info("Media not found: %s", media_path)
 
         if len(media_group) > 1:
-            media_list = [
-                f"{media[1]} (Caption: {media[0].caption if media[0].caption else 'No caption'})"
-                for media in media_group
-            ]
-            log.info("Album prepared: %s", media_list)
-            await self.bot.send_media_group(
-                chat_id=chat_id, media=[m[0] for m in media_group]
-            )
-            log.info(
-                "Album sent to chat ID %s: %d media items",
-                chat_id,
-                len(media_group),
-            )
+            try:
+                media_list = [
+                    f"{media[1]} "
+                    f"(Caption: {media[0].caption if media[0].caption else 'No caption'})"
+                    for media in media_group
+                ]
+                log.info("Album prepared: %s", media_list)
+                await self.bot.send_media_group(
+                    chat_id=chat_id, media=[m[0] for m in media_group]
+                )
+                log.info(
+                    "Album sent to chat ID %s: %d media items",
+                    chat_id,
+                    len(media_group),
+                )
+            except TelegramError as e:
+                log.error("Failed to send media group: %s", e)
         elif len(media_group) == 1:
-            media_item = media_group[0][0]
-            if isinstance(media_item, InputMediaPhoto):
-                await self.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=media_item.media,  # type: ignore
-                    caption=media_item.caption,
-                )
-                log.info("Photo sent to chat ID %s", chat_id)
-            elif isinstance(media_item, InputMediaVideo):
-                await self.bot.send_video(
-                    chat_id=chat_id,
-                    video=media_item.media,  # type: ignore
-                    caption=media_item.caption,
-                )
-                log.info("Video sent to chat ID %s", chat_id)
+            try:
+                media_item = media_group[0][0]
+                if isinstance(media_item, InputMediaPhoto):
+                    await self.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=media_item.media,  # type: ignore
+                        caption=media_item.caption,
+                    )
+                    log.info("Photo sent to chat ID %s", chat_id)
+                elif isinstance(media_item, InputMediaVideo):
+                    await self.bot.send_video(
+                        chat_id=chat_id,
+                        video=media_item.media,  # type: ignore
+                        caption=media_item.caption,
+                    )
+                    log.info("Video sent to chat ID %s", chat_id)
+            except TelegramError as e:
+                log.error("Failed to send media item: %s", e)
 
     async def run(self, run_args):
         """
@@ -284,19 +323,31 @@ def cli():
         type=str,
         help="Message to send (only used if -m is not specified).",
     )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s v{VERSION}",
+        help="Show program's version number and exit.",
+    )
+    parser.epilog = f"Visit {URL} for more information."
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = cli()
-    main = SendTg(bot_token=args.bot_token, chat_id=args.chat_id)
-    if not args.message and not args.media:
-        sys.exit("No message or media provided.")
-    if not args.bot_token and not args.chat_id:
-        log.info(
-            "Using default bot token and chat ID. %s, %s",
-            main.bot_token.replace(main.bot_token[6:], "*" * 30),
-            main.chat_id,
-        )
-    asyncio.run(main.run(args))
+    try:
+        main = SendTg(bot_token=args.bot_token, chat_id=args.chat_id)
+        if not args.message and not args.media:
+            sys.exit("No message or media provided.")
+        if not args.bot_token and not args.chat_id:
+            log.info(
+                "Using default bot token and chat ID. %s, %s",
+                main.bot_token.replace(main.bot_token[6:], "*" * 30),
+                main.chat_id,
+            )
+        asyncio.run(main.run(args))
+    except ValueError as e:
+        log.error(e)
+        sys.exit(f"Input validation error: {e}")
