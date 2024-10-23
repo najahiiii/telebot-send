@@ -1,7 +1,8 @@
 # pylint: disable=line-too-long
 """Bot configuration"""
 
-DEFAULT_CHAT_ID = ""
+DEFAULT_API_URL = "https://api.telegram.org/bot"
 DEFAULT_BOT_TOKEN = ""
-URL = "https://github.com/najahiiii/telebot-send/tree/staging/pypi"
+DEFAULT_CHAT_ID = ""
+URL = "https://github.com/najahiiii/telebot-send"
 VERSION = "1.0.0"
