@@ -8,13 +8,16 @@
 - Send text messages to any Telegram chat.
 - Upload media files (images and videos) directly to chats.
 - Send media files either as compressed or uncompressed.
+- Send media files as group or individually.
+- Send media files with spoiler.
+- Send chat action with asynchronously in a separate thread.
 - Include captions for media being sent.
 - Create inline buttons with custom text and URLs.
 
 ## Prerequisites
 
 - Python 3.8+
-- `config.py` file containing your bot token
+- `config.py` file containing your bot token and chat id
 
 ## Installation
 
@@ -43,52 +46,58 @@
     pip install -r requirements.txt
     ```
 
-3. Create a `config.py` file using the `example.config.py` template:
+5. Create a `config.py` file using the `example.config.py` template:
 
    ```python
-    # pylint: disable=line-too-long
-    """Bot configuration"""
+   # pylint: disable=line-too-long
+   """Bot configuration"""
 
-    DEFAULT_CHAT_ID = "YOUR CHAT ID"
-    DEFAULT_BOT_TOKEN = "YOUR BOT TOKEN"
+   DEFAULT_API_URL = "https://api.telegram.org/bot"
+   DEFAULT_BOT_TOKEN = "YOUR_BOT_TOKEN"
+   DEFAULT_CHAT_ID = "YOUT_CHAT_ID"
+   URL = "https://github.com/najahiiii/telebot-send"
+   VERSION = "1.0.0"
    ```
 
 ## Command-Line Options
 
-- `-h` : Show help.
+- `-a`, `--api_url`: API URL for the Telegram bot. (Default: <https://api.telegram.org/bot>)
 - `-t`, `--bot_token`: Token for the Telegram bot.
 - `-c`, `--chat_id`: Chat ID to send the message or media to.
-- `-m`, `--media`: Path to one or more media files to be sent.
-- `-C`, `--caption`: Caption for the media being sent (optional).
-- `-F`, `--as_file`: Sends media as uncompressed (optional).
-- `--button_text`: Text displayed on the inline button (optional).
-- `--button_url`: URL that the inline button links to (optional).
-- `message`: The message text to send (parse mode: HTML).
+- `-m`, `--media`: Path of one or more media files to send.
+- `--spoiler`: Send media with spoiler.
+- `--no-group`: Send media as individual files. (Default: False)
+- `-F`, `--as_file`: Send the media as a file (Uncompressed).
+- `-C`, `--caption`: Caption for the media being sent.
+- `--button-text`: Text displayed on the inline button.
+- `--button-url`: URL that the button links to.
+- `message`: Message to send (only used if -m is not specified).
+- `-v`, `--version`: Show program's version number and exit.
 
 ## Examples
 
 1. **Send a simple message:**
 
-   ```
+   ```bash
    python sendtg.py -t YOUR_BOT_TOKEN -c YOUR_CHAT_ID "Hello, world!"
    ```
 
 2. **Send a photo with a caption:**
 
-   ```
-   python sendtg.py -t YOUR_BOT_TOKEN -c YOUR_CHAT_ID -m /path/to/photo.jpg -C "Check out this photo!"
+   ```bash
+   python sendtg.py -t YOUR_BOT_TOKEN -c YOUR_CHAT_ID -m /path/to/photo.jpg --caption "Check out this photo!"
    ```
 
 3. **Send multiple media files as a media group:**
 
-   ```
+   ```bash
    python sendtg.py -t YOUR_BOT_TOKEN -c YOUR_CHAT_ID -m /path/to/photo1.jpg /path/to/photo2.jpg ...
    ```
 
 4. **Send a message with an inline button:**
 
-   ```
-   python sendtg.py -t YOUR_BOT_TOKEN -c YOUR_CHAT_ID "Click the button below:" --button_text "Google" --button_url "https://www.google.com"
+   ```bash
+   python sendtg.py -t YOUR_BOT_TOKEN -c YOUR_CHAT_ID "Click the button below:" --button-text "PornHub" --button-url "https://pornhub.com"
    ```
 
 ## License
