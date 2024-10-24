@@ -6,6 +6,7 @@ import argparse
 import json
 import mimetypes
 import os
+import sys
 import threading
 
 import requests
@@ -526,7 +527,7 @@ if __name__ == "__main__":
     try:
         main = SendTg(bot_token=args.bot_token, chat_id=args.chat_id)
         if not args.message and not args.media:
-            log.info("No message or media provided.")
+            sys.exit("No message or media provided.")
         if not args.bot_token and not args.chat_id:
             log.info(
                 "Using default bot token and chat ID. %s, %s",
