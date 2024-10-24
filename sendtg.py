@@ -119,7 +119,7 @@ class SendTg:
         url = f"{self.api_url}{self.bot_token}/sendMessage"
         payload = {
             "chat_id": chat_id,
-            "text": message,
+            "text": message.replace("\\n", "\n"),
             "parse_mode": "HTML",
         }
 
@@ -526,7 +526,7 @@ if __name__ == "__main__":
     try:
         main = SendTg(bot_token=args.bot_token, chat_id=args.chat_id)
         if not args.message and not args.media:
-            log.error("No message or media provided.")
+            log.info("No message or media provided.")
         if not args.bot_token and not args.chat_id:
             log.info(
                 "Using default bot token and chat ID. %s, %s",
