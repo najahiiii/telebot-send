@@ -6,8 +6,10 @@ import argparse
 import json
 import mimetypes
 import os
+import random
 import sys
 import threading
+import time
 
 import requests
 
@@ -357,6 +359,57 @@ class SendTg:
             log.error("Both button_text and button_url must be provided.")
         return None
 
+    def check(self, chat_id):
+        """
+        Sends a chat action to the specified chat and logs the API response time.
+
+        Parameters:
+        chat_id (int): The unique identifier for the target chat.
+
+        Raises:
+        requests.exceptions.RequestException: If there is an issue with the HTTP request.
+
+        Logs:
+        - API Response time in milliseconds.
+        - Error message with redacted bot token if the request fails.
+        - HTTP status code and response text if available when the request fails.
+        """
+        actions = [
+            "typing",
+            "upload_photo",
+            "record_video",
+            "upload_video",
+            "record_voice",
+            "upload_voice",
+            "upload_document",
+            "choose_sticker",
+            "find_location",
+            "record_video_note",
+            "upload_video_note",
+        ]
+        url = f"{self.api_url}{self.bot_token}/sendChatAction"
+        data = {"chat_id": chat_id, "action": actions[random.randint(0, 10)]}
+
+        try:
+            start = int(time.time())
+            response = requests.post(url, json=data, timeout=None)
+            response.raise_for_status()
+            end = int(time.time())
+
+            time_ms = (end - start) * 1000
+
+            log.info("%s API Response time: %s ms", self.api_url, time_ms)
+        except requests.exceptions.RequestException as e:
+            err_msg = str(e)
+            msg = err_msg.replace(self.bot_token, "REDACTED")
+            log.error("Failed to send message: %s", msg)
+            if hasattr(e, "response") and e.response is not None:
+                log.debug(
+                    "HTTP Status Code: %s, Response: %s",
+                    e.response.status_code,
+                    e.response.text,
+                )
+
     def run(self, run_args):
         """
         Executes the run method to send a message or media to a specified chat.
@@ -378,6 +431,21 @@ class SendTg:
         """
         chat_id = self.chat_id
 
+        if not run_args.message and not run_args.media:
+            if getattr(run_args, "check", False):
+                self.check(chat_id)
+                return
+            sys.exit("No message or media provided, use -h/--help for help.")
+
+        if not run_args.bot_token and not run_args.chat_id:
+            if not run_args.api_url:
+                log.info("Using default bot api URL. %s", self.api_url)
+            log.info(
+                "Using default bot token and chat ID. %s, %s",
+                self.bot_token.replace(self.bot_token[10:], "*" * 30),
+                self.chat_id,
+            )
+
         if run_args.media:
             self.send_media(
                 chat_id,
@@ -390,16 +458,20 @@ class SendTg:
                 spoiler=run_args.spoiler,
             )
         else:
-            reply_markup = None
-            if run_args.button_text and run_args.button_url:
-                reply_markup = {
+            reply_markup = (
+                {
                     "inline_keyboard": [
                         [{"text": run_args.button_text, "url": run_args.button_url}]
                     ]
                 }
-            if not run_args.message:
-                return
-            self.send_message(chat_id, run_args.message, reply_markup)
+                if run_args.button_text and run_args.button_url
+                else None
+            )
+
+            if run_args.message:
+                self.send_message(chat_id, run_args.message, reply_markup)
+            else:
+                raise ValueError("No message or media provided.")
 
 
 def cli():
@@ -407,7 +479,7 @@ def cli():
     Parse command-line arguments for sending messages or media to a specified chat ID.
 
     Arguments:
-    -a, --api_url: API URL for the Telegram bot. (Default: https://api.telegram.org/bot)
+    -a, --api_url: API URL for the Telegram bot. (Default: Using from config.py)
     -t, --bot_token: Token for the Telegram bot.
     -c, --chat_id: Chat ID to send the message or media to.
     -m, --media: Path of one or more media files to send.
@@ -436,7 +508,7 @@ def cli():
         "-a",
         "--api_url",
         type=str,
-        help="API URL for the Telegram bot. (Default: https://api.telegram.org/bot)",
+        help=f"API URL for the Telegram bot. (Default: {DEFAULT_API_URL})",
     )
     parser.add_argument(
         "-t", "--bot_token", type=str, help="Token for the Telegram bot."
@@ -448,7 +520,9 @@ def cli():
         "-m", "--media", nargs="+", help="Path of one or more media files to send."
     )
     parser.add_argument(
-        "--spoiler", action="store_true", help="Send media with spoiler."
+        "--spoiler",
+        action="store_true",
+        help="Send media with spoiler, applies to photos and videos only.",
     )
     parser.add_argument(
         "--no-group",
@@ -476,6 +550,11 @@ def cli():
         help="Message to send (only used if -m is not specified).",
     )
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check the API response time for the bot.",
+    )
+    parser.add_argument(
         "-v",
         "--version",
         action="version",
@@ -499,14 +578,6 @@ if __name__ == "__main__":
         main = SendTg(
             api_url=args.api_url, bot_token=args.bot_token, chat_id=args.chat_id
         )
-        if not args.message and not args.media:
-            sys.exit("No message or media provided.")
-        if not args.bot_token and not args.chat_id:
-            log.info(
-                "Using default bot token and chat ID. %s, %s",
-                main.bot_token.replace(main.bot_token[6:], "*" * 30),
-                main.chat_id,
-            )
         main.run(args)
     except ValueError as e:
         log.error(e)
