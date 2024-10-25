@@ -71,6 +71,30 @@ class SendTg:
             log.error("Chat ID is required!")
             raise ValueError("Chat ID is missing!")
 
+    def log_except(self, msgs, e):
+        """
+        Logs an exception with a redacted error message and additional HTTP response details
+            if available.
+
+        Args:
+            msgs (str): The message to log alongside the exception.
+            e (Exception): The exception to log. If the exception has a 'response' attribute,
+                            additional HTTP status code and response text will be logged.
+
+        Notes:
+            The bot token within the exception message will be redacted for security purposes.
+        """
+        err_msg = str(e)
+        redacted_msg = err_msg.replace(self.bot_token, "REDACTED")
+        log.error("%s %s", msgs, redacted_msg)
+
+        if hasattr(e, "response") and e.response is not None:
+            log.debug(
+                "HTTP Status Code: %s, Response: %s",
+                e.response.status_code,
+                e.response.text,
+            )
+
     def send_chat_action(self, chat_id, action="typing"):
         """
         Sends a chat action to the specified chat.
@@ -94,9 +118,7 @@ class SendTg:
                 response = requests.post(url, data=data, timeout=None)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
-                err_msg = str(e)
-                msg = err_msg.replace(self.bot_token, "REDACTED")
-                log.error("Failed to send chat action: %s", msg)
+                self.log_except("Failed to send chat action:", e)
 
         thread = threading.Thread(target=send_action)
         thread.start()
@@ -135,15 +157,7 @@ class SendTg:
             response.raise_for_status()
             log.info("Message sent to chat ID %s: %s", chat_id, message)
         except requests.exceptions.RequestException as e:
-            err_msg = str(e)
-            msg = err_msg.replace(self.bot_token, "REDACTED")
-            log.error("Failed to send message: %s", msg)
-            if hasattr(e, "response") and e.response is not None:
-                log.debug(
-                    "HTTP Status Code: %s, Response: %s",
-                    e.response.status_code,
-                    e.response.text,
-                )
+            self.log_except("Failed to send message:", e)
 
     def send_media(
         self,
@@ -252,9 +266,7 @@ class SendTg:
                     self._send_media_group(chat_id, media_chunk, current_files_data)
 
         except requests.exceptions.RequestException as e:
-            err_msg = str(e)
-            msg = err_msg.replace(self.bot_token, "REDACTED")
-            log.error("Failed to send media: %s", msg)
+            self.log_except("Failed to send media:", e)
         finally:
             for media_file in files_data.values():
                 media_file.close()
@@ -282,15 +294,7 @@ class SendTg:
                 response.raise_for_status()
                 log.info("Document sent to chat ID %s: %s", chat_id, media_path)
         except requests.exceptions.RequestException as e:
-            err_msg = str(e)
-            msg = err_msg.replace(self.bot_token, "REDACTED")
-            log.error("Failed to send document: %s", msg)
-            if hasattr(e, "response") and e.response is not None:
-                log.debug(
-                    "HTTP Status Code: %s, Response: %s",
-                    e.response.status_code,
-                    e.response.text,
-                )
+            self.log_except("Failed to send document:", e)
 
     def _send_media_group(self, chat_id, media_group, files_data):
         try:
@@ -311,15 +315,7 @@ class SendTg:
             )
 
         except requests.exceptions.RequestException as e:
-            err_msg = str(e)
-            msg = err_msg.replace(self.bot_token, "REDACTED")
-            log.error("Failed to send media group: %s", msg)
-            if hasattr(e, "response") and e.response is not None:
-                log.debug(
-                    "HTTP Status Code: %s, Response: %s",
-                    e.response.status_code,
-                    e.response.text,
-                )
+            self.log_except("Failed to send media group:", e)
 
     def _send_single_media(
         self, chat_id, media, files_data, caption="", reply_markup=None, spoiler=False
@@ -339,15 +335,7 @@ class SendTg:
             response.raise_for_status()
             log.info("Single media file sent to chat ID %s: %s", chat_id, file_name)
         except requests.exceptions.RequestException as e:
-            err_msg = str(e)
-            msg = err_msg.replace(self.bot_token, "REDACTED")
-            log.error("Failed to send media file: %s", msg)
-            if hasattr(e, "response") and e.response is not None:
-                log.debug(
-                    "HTTP Status Code: %s, Response: %s",
-                    e.response.status_code,
-                    e.response.text,
-                )
+            self.log_except("Failed to send media file:", e)
 
     def _create_reply_markup(self, button_text, button_url):
         if button_text and button_url:
@@ -400,15 +388,7 @@ class SendTg:
 
             log.info("%s API Response time: %s ms", self.api_url, time_ms)
         except requests.exceptions.RequestException as e:
-            err_msg = str(e)
-            msg = err_msg.replace(self.bot_token, "REDACTED")
-            log.error("Failed to send message: %s", msg)
-            if hasattr(e, "response") and e.response is not None:
-                log.debug(
-                    "HTTP Status Code: %s, Response: %s",
-                    e.response.status_code,
-                    e.response.text,
-                )
+            self.log_except("Failed to send chat action:", e)
 
     def run(self, run_args):
         """
