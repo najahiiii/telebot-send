@@ -25,7 +25,7 @@ class SendTg:
         api_url (str): The base URL for the Telegram Bot API.
         bot_token (str): The token for authenticating the bot.
         chat_id (str or int): The unique identifier for the target chat.
-
+        chat_name (str): The name of the chat, initialized to "Unknown".
 
     Methods:
         __init__(api_url=None, bot_token=None, chat_id=None):
@@ -36,7 +36,8 @@ class SendTg:
                 response details if available.
 
         send_chat_action(chat_id, action="typing"):
-            Sends a chat action (e.g., typing, upload_photo) to the specified chat ID.
+            Sends a chat action (e.g., typing, uploading photo) to a specified chat
+                and retrieves the chat name.
 
         send_message(chat_id, message, reply_markup=None):
             Sends a text message to the specified chat ID with optional reply markup.
@@ -70,6 +71,7 @@ class SendTg:
         self.api_url = api_url or DEFAULT_API_URL
         self.bot_token = bot_token or DEFAULT_BOT_TOKEN
         self.chat_id = chat_id or DEFAULT_CHAT_ID
+        self.chat_name = "Unknown"
 
         if not self.bot_token:
             log.error("Bot token is required!")
@@ -105,31 +107,70 @@ class SendTg:
 
     def send_chat_action(self, chat_id, action="typing"):
         """
-        Sends a chat action to the specified chat.
+        Sends a chat action (e.g., typing, uploading photo) to a specified chat and
+            retrieves the chat name.
 
-        This method sends a chat action (e.g., 'typing', 'upload_photo') to the specified chat ID.
-        The action is sent asynchronously in a separate thread.
+        This method performs two tasks concurrently:
+        1. Sends a chat action to the specified chat.
+        2. Retrieves the name of the chat.
 
         Args:
-            chat_id (int or str): Unique identifier for the target Chat ID.
+            chat_id (int or str): Unique identifier for the target chat
+                or username of the target channel.
             action (str, optional): Type of action to broadcast. Defaults to "typing".
 
         Raises:
-            requests.exceptions.RequestException: If there is an issue with the request.
+            requests.exceptions.RequestException: If there is an issue with the HTTP request.
+
+        Side Effects:
+            Sets the `self.chat_name` attribute to the name of the chat or
+                an error message if retrieval fails.
         """
 
         def send_action():
             try:
                 url = f"{self.api_url}{self.bot_token}/sendChatAction"
                 data = {"chat_id": chat_id, "action": action}
-
                 response = requests.post(url, data=data, timeout=None)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 self.log_except("Failed to send chat action:", e)
 
-        thread = threading.Thread(target=send_action)
-        thread.start()
+        def get_chat_name():
+            try:
+                url = f"{self.api_url}{self.bot_token}/getChat"
+                params = {"chat_id": chat_id}
+                response = requests.get(url, params=params, timeout=None)
+                response.raise_for_status()
+                chat_data = response.json()
+
+                if chat_data.get("ok"):
+                    chat_info = chat_data.get("result")
+                    if "title" in chat_info:
+                        self.chat_name = chat_info["title"]
+                    elif "first_name" in chat_info:
+                        self.chat_name = f"{chat_info['first_name']}"
+                        f" {chat_info.get('last_name', '')}".strip()
+                    else:
+                        self.chat_name = "Unknown"
+                else:
+                    self.chat_name = f"Error: {chat_data.get('description')}"
+            except requests.exceptions.RequestException as e:
+                self.log_except("Failed to get chat name:", e)
+                self.chat_name = "Unknown"
+
+        self.chat_name = "Unknown"
+
+        threads = [
+            threading.Thread(target=send_action),
+            threading.Thread(target=get_chat_name),
+        ]
+
+        for thread in threads:
+            thread.start()
+
+        for thread in threads:
+            thread.join()
 
     def send_message(self, chat_id, message, reply_markup=None):
         """
@@ -162,7 +203,7 @@ class SendTg:
             self.send_chat_action(chat_id, action="typing")
             response = requests.post(url, json=payload, timeout=None)
             response.raise_for_status()
-            log.info("Message sent to chat ID %s: %s", chat_id, message)
+            log.info("Message sent to %s: %s", self.chat_name, message)
         except requests.exceptions.RequestException as e:
             self.log_except("Failed to send message:", e)
 
@@ -300,7 +341,7 @@ class SendTg:
                 url = f"{self.api_url}{self.bot_token}/sendDocument"
                 response = requests.post(url, files=files, data=data, timeout=None)
                 response.raise_for_status()
-                log.info("Document sent to chat ID %s: %s", chat_id, media_path)
+                log.info("Document sent to %s: %s", self.chat_name, media_path)
         except requests.exceptions.RequestException as e:
             self.log_except("Failed to send document:", e)
 
@@ -317,9 +358,9 @@ class SendTg:
             response = requests.post(url, files=files_data, data=data, timeout=None)
             response.raise_for_status()
             log.info(
-                "Media group sent to chat ID %s with %d items",
-                chat_id,
+                "%d items sent to %s as media group",
                 len(media_group),
+                self.chat_name,
             )
 
         except requests.exceptions.RequestException as e:
@@ -341,7 +382,7 @@ class SendTg:
             }
             response = requests.post(url, files=files, data=data, timeout=None)
             response.raise_for_status()
-            log.info("Single media file sent to chat ID %s: %s", chat_id, file_name)
+            log.info("Single media file sent to %s: %s", self.chat_name, file_name)
         except requests.exceptions.RequestException as e:
             self.log_except("Failed to send media file:", e)
 
