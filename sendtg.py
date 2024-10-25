@@ -376,7 +376,7 @@ class SendTg:
             "upload_video_note",
         ]
         url = f"{self.api_url}{self.bot_token}/sendChatAction"
-        data = {"chat_id": chat_id, "action": actions[random.randint(0, 10)]}
+        data = {"chat_id": chat_id, "action": random.choice(actions)}
 
         try:
             start = int(time.time())
