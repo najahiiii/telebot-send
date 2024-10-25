@@ -17,6 +17,7 @@
 ## Prerequisites
 
 - Python 3.8+
+- [requests](https://pypi.org/project/requests/)
 - `config.py` file containing your bot token and chat id
 
 ## Installation
@@ -33,20 +34,13 @@
     cd telebot-send
     ```
 
-3. Create a virtual environment (optional, but recommended):
-
-    ```bash
-    python3 -m venv telebot
-    source telebot/bin/activate
-    ```
-
-4. Install dependencies:
+3. Install dependencies:
 
     ```bash
     pip install -r requirements.txt
     ```
 
-5. Create a `config.py` file using the `example.config.py` template:
+4. Create a `config.py` file using the `example.config.py` template:
 
    ```python
    # pylint: disable=line-too-long
@@ -65,13 +59,14 @@
 - `-t`, `--bot_token`: Token for the Telegram bot.
 - `-c`, `--chat_id`: Chat ID to send the message or media to.
 - `-m`, `--media`: Path of one or more media files to send.
-- `--spoiler`: Send media with spoiler.
-- `--no-group`: Send media as individual files. (Default: False)
-- `-F`, `--as_file`: Send the media as a file (Uncompressed).
+- `--spoiler`: Send media with spoiler, applies to photos and videos only.
+- `--no-group`: Send media as individual files.
 - `-C`, `--caption`: Caption for the media being sent.
+- `-F`, `--as_file`: Send the media as a file (Uncompressed).
 - `--button-text`: Text displayed on the inline button.
 - `--button-url`: URL that the button links to.
 - `message`: Message to send (only used if -m is not specified).
+- `--check`: Check the API response time for the bot.
 - `-v`, `--version`: Show program's version number and exit.
 
 ## Examples
