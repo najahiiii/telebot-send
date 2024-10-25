@@ -147,11 +147,11 @@ class SendTg:
         self,
         chat_id,
         media_paths,
-        caption=None,
+        caption="",
         as_file=False,
         no_group=False,
-        button_text=None,
-        button_url=None,
+        button_text="",
+        button_url="",
         spoiler=False,
     ):
         """
@@ -198,16 +198,17 @@ class SendTg:
                     {
                         "type": media_type,
                         "media": f"attach://{file_name}",
-                        "caption": caption if len(media_group) == 0 else None,
+                        "caption": caption if len(media_group) == 0 else "",
+                        "has_spoiler": spoiler,
                     }
                 )
             else:
                 self.send_chat_action(chat_id, action="upload_document")
                 self._send_document(chat_id, media_path, caption, reply_markup)
+                return
 
         try:
             if no_group:
-                log.info("Sending media individually.")
                 for media_item in media_group:
                     self.send_chat_action(
                         chat_id, action=f"upload_{media_item['type'].lower()}"
@@ -218,65 +219,35 @@ class SendTg:
                             chat_id,
                             media_item,
                             {file_name: files_data[file_name]},
+                            caption,
                             reply_markup,
                             spoiler,
                         )
             else:
-                if len(media_group) > 1:
-                    for i in range(0, len(media_group), 10):
-                        media_chunk = media_group[i : i + 10]
-                        log.info(
-                            "Media chunk #%d capped and splitted with %d media files",
-                            i // 10 + 1,
-                            len(media_chunk),
-                        )
-
-                        current_files_data = {
-                            os.path.basename(
-                                media["media"].replace("attach://", "")
-                            ): files_data[
-                                os.path.basename(
-                                    media["media"].replace("attach://", "")
-                                )
-                            ]
-                            for media in media_chunk
-                            if os.path.basename(media["media"].replace("attach://", ""))
-                            in files_data
-                        }
-                        self.send_chat_action(chat_id, action="upload_photo")
-                        self._send_media_group(chat_id, media_chunk, current_files_data)
-
-                else:
-                    if media_group:
-                        media_item = media_group[0]
-                        file_name = media_item["media"].replace("attach://", "")
-                        if file_name in files_data:
-                            self._send_single_media(
-                                chat_id,
-                                media_item,
-                                {file_name: files_data[file_name]},
-                                reply_markup,
-                                spoiler,
-                            )
-
-                remaining = len(media_group) % 10
-                if remaining > 0 and len(media_group) > 1:
+                log.info("Sending media in groups of 10.")
+                for i in range(0, len(media_group), 10):
+                    media_chunk = media_group[i : i + 10]
                     log.info(
-                        "Sending remaining media chunk with %d media files",
-                        remaining,
+                        "Sending media group #%d with %d media files",
+                        (i // 10) + 1,
+                        len(media_chunk),
                     )
-                    remaining_chunk = media_group[-remaining:]
+
                     current_files_data = {
                         os.path.basename(
                             media["media"].replace("attach://", "")
                         ): files_data[
                             os.path.basename(media["media"].replace("attach://", ""))
                         ]
-                        for media in remaining_chunk
+                        for media in media_chunk
                         if os.path.basename(media["media"].replace("attach://", ""))
                         in files_data
                     }
-                    self._send_media_group(chat_id, remaining_chunk, current_files_data)
+
+                    self.send_chat_action(
+                        chat_id, action="upload_" + media_type.lower()
+                    )
+                    self._send_media_group(chat_id, media_chunk, current_files_data)
 
         except requests.exceptions.RequestException as e:
             err_msg = str(e)
@@ -349,7 +320,7 @@ class SendTg:
                 )
 
     def _send_single_media(
-        self, chat_id, media, files_data, reply_markup=None, spoiler=False
+        self, chat_id, media, files_data, caption="", reply_markup=None, spoiler=False
     ):
         file_name = media["media"].replace("attach://", "")
         files = {media["type"]: files_data[file_name]}
@@ -358,7 +329,7 @@ class SendTg:
             url = f"{self.api_url}{self.bot_token}/send{media['type'].capitalize()}"
             data = {
                 "chat_id": chat_id,
-                "caption": media.get("caption"),
+                "caption": caption,
                 "reply_markup": reply_markup,
                 "has_spoiler": spoiler,
             }
@@ -487,7 +458,7 @@ def cli():
     )
     parser.add_argument(
         "-F",
-        "--as_file",
+        "--as-file",
         action="store_true",
         help="Send the media as a file (Uncompressed).",
     )
@@ -525,7 +496,9 @@ def cli():
 if __name__ == "__main__":
     args = cli()
     try:
-        main = SendTg(bot_token=args.bot_token, chat_id=args.chat_id)
+        main = SendTg(
+            api_url=args.api_url, bot_token=args.bot_token, chat_id=args.chat_id
+        )
         if not args.message and not args.media:
             sys.exit("No message or media provided.")
         if not args.bot_token and not args.chat_id:
