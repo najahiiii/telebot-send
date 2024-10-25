@@ -23,26 +23,34 @@ class SendTg:
 
     Attributes:
         api_url (str): The base URL for the Telegram Bot API.
-        bot_token (str): The token for the Telegram bot.
-        chat_id (str): The chat ID to which messages will be sent.
+        bot_token (str): The token for authenticating the bot.
+        chat_id (str or int): The unique identifier for the target chat.
+
 
     Methods:
+        __init__(api_url=None, bot_token=None, chat_id=None):
+            Initializes the SendTg instance with the provided API URL, bot token, and chat ID.
+
+        log_except(msgs, e):
+            Logs an exception with a redacted error message and additional HTTP
+                response details if available.
+
         send_chat_action(chat_id, action="typing"):
             Sends a chat action (e.g., typing, upload_photo) to the specified chat ID.
 
         send_message(chat_id, message, reply_markup=None):
             Sends a text message to the specified chat ID with optional reply markup.
 
-        send_media(chat_id, media_paths, caption=None, as_file=False, no_group=False,
-                    button_text=None, button_url=None, spoiler=False):
+        send_media(chat_id, media_paths, caption="", as_file=False, no_group=False,
+                    button_text="", button_url="", spoiler=False):
             Sends media files (photos, videos, documents) to the specified chat ID.
                 Supports sending media as files, grouping media, and adding buttons.
 
         _media_type(mime_type):
-            Determines the media type (photo, video, audio, document) based on the MIME type.
+            Determines the media type based on the MIME type.
 
         _send_document(chat_id, media_path, caption, reply_markup=None):
-            Sends a document to the specified chat ID with an optional caption and reply markup.
+            Sends a document to a specified chat.
 
         _send_media_group(chat_id, media_group, files_data):
             Sends a group of media files to the specified chat ID.
@@ -125,21 +133,20 @@ class SendTg:
 
     def send_message(self, chat_id, message, reply_markup=None):
         """
-        Sends a message to a specified Telegram chat.
+        Sends a message to a specified chat.
 
         Args:
             chat_id (int or str): Unique identifier for the target Chat ID.
             message (str): Text of the message to be sent.
-            reply_markup (dict, optional): Additional interface options for the message
-                (e.g., inline keyboards).
+            reply_markup (dict, optional): Additional interface options such as inline keyboards,
+                custom reply keyboards, etc. Defaults to None.
 
         Raises:
             requests.exceptions.RequestException: If there is an issue with the HTTP request.
 
         Logs:
             Info: When the message is successfully sent.
-            Error: When the message fails to send, with the bot token redacted.
-            Debug: HTTP status code and response text if available when an error occurs.
+            Exception: If there is a failure in sending the message.
         """
         url = f"{self.api_url}{self.bot_token}/sendMessage"
         payload = {
@@ -176,14 +183,15 @@ class SendTg:
         Parameters:
         - chat_id (int or str): Unique identifier for the target Chat ID.
         - media_paths (list of str): List of file paths to the media files to be sent.
-        - caption (str, optional): Caption for the media. Only the first media file will
-            have the caption if sending multiple files.
+        - caption (str, optional): Caption for the media. Defaults to an empty string.
         - as_file (bool, optional): If True, sends the media as a document. Defaults to False.
-        - no_group (bool, optional): If True, sends media files individually
-            instead of as a media group. Defaults to False.
-        - button_text (str, optional): Text for the inline button. Defaults to None.
-        - button_url (str, optional): URL for the inline button. Defaults to None.
+        - no_group (bool, optional): If True, sends each media file individually. Defaults to False.
+        - button_text (str, optional): Text for the inline button. Defaults to an empty string.
+        - button_url (str, optional): URL for the inline button. Defaults to an empty string.
         - spoiler (bool, optional): If True, marks the media as a spoiler. Defaults to False.
+
+        Returns:
+        None
 
         Raises:
         - requests.exceptions.RequestException: If there is an error while sending the media.
@@ -349,18 +357,16 @@ class SendTg:
 
     def check(self, chat_id):
         """
-        Sends a chat action to the specified chat and logs the API response time.
+        Sends a random chat action to the specified chat ID and logs the response time.
 
         Parameters:
-        chat_id (int): The unique identifier for the target chat.
+        chat_id (int): The ID of the chat to which the action will be sent.
 
         Raises:
         requests.exceptions.RequestException: If there is an issue with the HTTP request.
 
         Logs:
-        - API Response time in milliseconds.
-        - Error message with redacted bot token if the request fails.
-        - HTTP status code and response text if available when the request fails.
+        Logs the API response time in milliseconds.
         """
         actions = [
             "typing",
@@ -392,22 +398,29 @@ class SendTg:
 
     def run(self, run_args):
         """
-        Executes the run method to send a message or media to a specified chat.
+        Executes the main logic for sending messages or media via the Telegram bot.
 
         Parameters:
-        run_args (object): An object containing the following attributes:
-            - media (str or None): The media file to be sent.
-                If None, a message will be sent instead.
-            - caption (str or None): The caption for the media file.
-            - as_file (bool): Whether to send the media as a file.
-            - no_group (bool): Whether to avoid grouping media files.
-            - button_text (str or None): The text for the inline button.
-            - button_url (str or None): The URL for the inline button.
-            - spoiler (bool): Whether the media is a spoiler.
-            - message (str or None): The message to be sent if no media is provided.
+        run_args (Namespace): A namespace object containing the following attributes:
+            - message (str): The message to be sent.
+            - media (str): The media file to be sent.
+            - bot_token (str): The bot token for authentication.
+            - chat_id (str): The chat ID to which the message or media will be sent.
+            - api_url (str): The API URL for the Telegram bot.
+            - check (bool): Flag to check the API response time for the bot.
+            - caption (str): Caption for the media file.
+            - as_file (bool): Flag to send media as a file.
+            - no_group (bool): Flag to avoid grouping media.
+            - button_text (str): Text for the inline button.
+            - button_url (str): URL for the inline button.
+            - spoiler (bool): Flag to mark media as a spoiler.
 
         Returns:
         None
+
+        Raises:
+        ValueError: If neither message nor media is provided.
+        SystemExit: If no message or media is provided and the check flag is not set.
         """
         chat_id = self.chat_id
 
@@ -456,27 +469,32 @@ class SendTg:
 
 def cli():
     """
-    Parse command-line arguments for sending messages or media to a specified chat ID.
+    Parses command-line arguments for sending messages or media to a specified chat ID.
 
     Arguments:
-    -a, --api_url: API URL for the Telegram bot. (Default: Using from config.py)
-    -t, --bot_token: Token for the Telegram bot.
-    -c, --chat_id: Chat ID to send the message or media to.
-    -m, --media: Path of one or more media files to send.
-    --spoiler: Send media with spoiler.
-    --no-group: Send media as individual files. (Default: False)
-    -F, --as_file: Send the media as a file (Uncompressed).
-    -C, --caption: Caption for the media being sent.
-    --button-text: Text displayed on the inline button.
-    --button-url: URL that the button links to.
-    message: Message to send (only used if -m is not specified).
-    -v, --version: Show program's version number and exit.
+        -a, --api_url (str): API URL for the Telegram bot. (Default: {DEFAULT_API_URL})
+        -t, --bot_token (str): Token for the Telegram bot.
+        -c, --chat_id: Chat ID to send the message or media to.
+        -m, --media: Path of one or more media files to send.
+        --spoiler: Send media with spoiler, applies to photos and videos only.
+        --no-group: Send media as individual files.
+        -F, --as-file: Send the media as a file (Uncompressed).
+        -C, --caption (str): Caption for the media being sent.
+        --button-text (str): Text displayed on the inline button.
+        --button-url (str): URL that the button links to.
+        message (str): Message to send (only used if -m is not specified).
+        --check: Check the API response time for the bot.
+        -v, --version: Show program's version number and exit.
 
     Help:
     Visit {URL} for more information.
 
     Note:
     If no bot token or chat ID is provided, the default values will be used.
+
+    Returns:
+    argparse.Namespace: Parsed command-line arguments.
+        If no bot token or chat ID is provided, the default values will be used.
 
     Returns:
     argparse.Namespace: Parsed command-line arguments.
