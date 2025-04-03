@@ -172,7 +172,7 @@ class SendTg:
         for thread in threads:
             thread.join()
 
-    def send_message(self, chat_id, message, reply_markup=None):
+    def send_message(self, chat_id, message, silent=False, reply_markup=None):
         """
         Sends a message to a specified chat.
 
@@ -194,6 +194,7 @@ class SendTg:
             "chat_id": chat_id,
             "text": message.replace("\\n", "\n"),
             "parse_mode": "HTML",
+            "disable_notification": silent,
         }
 
         if reply_markup:
@@ -454,6 +455,7 @@ class SendTg:
             - no_group (bool): Flag to avoid grouping media.
             - button_text (str): Text for the inline button.
             - button_url (str): URL for the inline button.
+            - silent (bool): Sends the message silently.
             - spoiler (bool): Flag to mark media as a spoiler.
 
         Returns:
@@ -503,7 +505,7 @@ class SendTg:
             )
 
             if run_args.message:
-                self.send_message(chat_id, run_args.message, reply_markup)
+                self.send_message(chat_id, run_args.message, run_args.silent, reply_markup)
             else:
                 raise ValueError("No message or media provided.")
 
@@ -523,6 +525,7 @@ def cli():
         -C, --caption (str): Caption for the media being sent.
         --button-text (str): Text displayed on the inline button.
         --button-url (str): URL that the button links to.
+        --silent: Sends the message silently.
         message (str): Message to send (only used if -m is not specified).
         --check: Check the API response time for the bot.
         -v, --version: Show program's version number and exit.
@@ -562,6 +565,11 @@ def cli():
         "--spoiler",
         action="store_true",
         help="Send media with spoiler, applies to photos and videos only.",
+    )
+    parser.add_argument(
+        "--silent",
+        action="store_true",
+        help="Sends the message silently.",
     )
     parser.add_argument(
         "--no-group",
