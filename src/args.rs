@@ -22,7 +22,12 @@ struct Cli {
     api_url: Option<String>,
     #[arg(short = 't', long = "bot_token", help = "Override the bot token.")]
     bot_token: Option<String>,
-    #[arg(short = 'c', long = "chat_id", help = "Override the target chat ID.")]
+    #[arg(
+        short = 'c',
+        long = "chat_id",
+        help = "Override the target chat ID.",
+        allow_hyphen_values = true
+    )]
     chat_id: Option<String>,
     #[arg(
         short = 'm',
@@ -66,6 +71,13 @@ struct Cli {
     silent: bool,
     #[arg(long = "check", help = "Check connectivity and credentials only.")]
     check: bool,
+    #[arg(
+        long = "thread-id",
+        alias = "thread_id",
+        help = "Target message thread ID for forum topics.",
+        allow_hyphen_values = true
+    )]
+    thread_id: Option<i64>,
     #[arg(help = "Message text when no media is provided.")]
     message: Option<String>,
 }
@@ -85,6 +97,7 @@ pub struct Args {
     pub message: Option<String>,
     pub check: bool,
     pub silent: bool,
+    pub thread_id: Option<i64>,
     pub provided_api_url: bool,
     pub provided_bot_token: bool,
     pub provided_chat_id: bool,
@@ -170,6 +183,7 @@ impl Args {
             message: cli.message.clone(),
             check: cli.check,
             silent: cli.silent,
+            thread_id: cli.thread_id,
             provided_api_url: cli.api_url.is_some(),
             provided_bot_token: cli.bot_token.is_some(),
             provided_chat_id: cli.chat_id.is_some(),

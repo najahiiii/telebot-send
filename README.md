@@ -64,6 +64,7 @@ Use `./target/release/sendtg --show-config` to print the stored values.
 | `-a`, `--api_url <URL>`     | Override the Bot API base URL (default `https://api.telegram.org/bot`). |
 | `-t`, `--bot_token <TOKEN>` | Override the bot token.                                                 |
 | `-c`, `--chat_id <ID>`      | Override the target chat ID/channel username.                           |
+| `--thread-id <ID>`          | Target a specific forum topic (message thread ID) inside a group.       |
 | `-m`, `--media <PATH>...`   | Attach one or more media files.                                         |
 | `--spoiler`                 | Mark supported media with Telegram’s spoiler animation.                 |
 | `--no-group`                | Send each media item individually (disables media albums).              |
@@ -108,6 +109,12 @@ Send a video silently with an inline button (overriding stored config):
   --silent \
   --button-text "Watch more" \
   --button-url "https://example.com"
+```
+
+Send a message to a specific forum topic inside a group:
+
+```bash
+./target/release/sendtg -c -1001234567890 --thread-id 42 "Halo topik!"
 ```
 
 Check API latency:

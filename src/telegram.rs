@@ -50,7 +50,7 @@ impl SendTg {
         if args.media_paths.is_empty() && args.message.is_none() {
             if args.check {
                 let chat_id = self.chat_id.clone();
-                self.check(&chat_id)?;
+                self.check(&chat_id, args.thread_id)?;
                 return Ok(());
             }
             return Err(anyhow!(
@@ -78,6 +78,7 @@ impl SendTg {
                 args.button_text.clone(),
                 args.button_url.clone(),
                 args.spoiler,
+                args.thread_id,
             )?;
             return Ok(());
         }
@@ -85,11 +86,24 @@ impl SendTg {
         if let Some(message) = &args.message {
             let reply_markup = utils::create_reply_markup(&args.button_text, &args.button_url);
             let chat_id = self.chat_id.clone();
-            self.send_message(&chat_id, message, args.silent, reply_markup.as_ref())?;
+            self.send_message(
+                &chat_id,
+                message,
+                args.silent,
+                reply_markup.as_ref(),
+                args.thread_id,
+            )?;
             return Ok(());
         }
 
         Err(anyhow!("No message or media provided."))
+    }
+
+    fn target_label(&self, thread_id: Option<i64>) -> String {
+        if let Some(id) = thread_id {
+            return format!("{} · Topic #{}", self.chat_name, id);
+        }
+        self.chat_name.clone()
     }
 
     fn send_message(
@@ -98,8 +112,9 @@ impl SendTg {
         message: &str,
         silent: bool,
         reply_markup: Option<&Value>,
+        thread_id: Option<i64>,
     ) -> Result<()> {
-        self.send_chat_action(chat_id, "typing");
+        self.send_chat_action(chat_id, "typing", thread_id);
 
         let mut payload = json!({
             "chat_id": chat_id,
@@ -108,6 +123,10 @@ impl SendTg {
             "disable_notification": silent,
         });
 
+        if let Some(id) = thread_id {
+            payload["message_thread_id"] = json!(id);
+        }
+
         if let Some(markup) = reply_markup {
             payload["reply_markup"] = markup.clone();
         }
@@ -115,9 +134,10 @@ impl SendTg {
         let url = format!("{}{}/sendMessage", self.api_url, self.bot_token);
         let response = self.client.post(&url).json(&payload).send();
 
-        match self.handle_response("Failed to send message:", response) {
+            match self.handle_response("Failed to send message:", response) {
             Ok(_) => {
-                log_info!("Message sent to {}: {}", self.chat_name, message);
+                let target = self.target_label(thread_id);
+                log_info!("Message sent to {}: {}", target, message);
                 Ok(())
             }
             Err(err) => Err(err),
@@ -134,6 +154,7 @@ impl SendTg {
         button_text: Option<String>,
         button_url: Option<String>,
         spoiler: bool,
+        thread_id: Option<i64>,
     ) -> Result<()> {
         let reply_markup_json = utils::create_reply_markup(&button_text, &button_url);
         let reply_markup_text = reply_markup_json
@@ -274,7 +295,7 @@ impl SendTg {
             if media_items[index].media_type == "document" {
                 if no_group {
                     let item = &media_items[index];
-                    self.send_chat_action(chat_id, "upload_document");
+                    self.send_chat_action(chat_id, "upload_document", thread_id);
                     let caption_to_use = item.caption.as_deref().or(caption);
                     self.send_single_media(
                         chat_id,
@@ -282,6 +303,7 @@ impl SendTg {
                         caption_to_use,
                         reply_markup_text.as_deref(),
                         item.spoiler,
+                        thread_id,
                     )?;
                     index += 1;
                     continue;
@@ -298,7 +320,7 @@ impl SendTg {
 
                 if chunk_indices.len() == 1 {
                     let item = &media_items[chunk_indices[0]];
-                    self.send_chat_action(chat_id, "upload_document");
+                    self.send_chat_action(chat_id, "upload_document", thread_id);
                     let caption_to_use = item.caption.as_deref().or(caption);
                     self.send_single_media(
                         chat_id,
@@ -306,16 +328,22 @@ impl SendTg {
                         caption_to_use,
                         reply_markup_text.as_deref(),
                         item.spoiler,
+                        thread_id,
                     )?;
                     continue;
                 }
 
-                self.send_chat_action(chat_id, "upload_document");
+                self.send_chat_action(chat_id, "upload_document", thread_id);
                 let chunk_items: Vec<MediaItem> = chunk_indices
                     .iter()
                     .map(|&idx| media_items[idx].clone())
                     .collect();
-                self.send_media_group(chat_id, &chunk_items, reply_markup_text.as_deref())?;
+                self.send_media_group(
+                    chat_id,
+                    &chunk_items,
+                    reply_markup_text.as_deref(),
+                    thread_id,
+                )?;
                 continue;
             }
 
@@ -336,7 +364,7 @@ impl SendTg {
                 for idx in chunk_indices {
                     let item = &media_items[idx];
                     let action = format!("upload_{}", item.media_type.to_lowercase());
-                    self.send_chat_action(chat_id, &action);
+                    self.send_chat_action(chat_id, &action, thread_id);
                     let caption_to_use = item.caption.as_deref().or(caption);
                     self.send_single_media(
                         chat_id,
@@ -344,6 +372,7 @@ impl SendTg {
                         caption_to_use,
                         reply_markup_text.as_deref(),
                         item.spoiler,
+                        thread_id,
                     )?;
                 }
                 continue;
@@ -351,12 +380,17 @@ impl SendTg {
 
             let first_item = &media_items[chunk_indices[0]];
             let action = format!("upload_{}", first_item.media_type.to_lowercase());
-            self.send_chat_action(chat_id, &action);
+            self.send_chat_action(chat_id, &action, thread_id);
             let chunk_items: Vec<MediaItem> = chunk_indices
                 .iter()
                 .map(|&idx| media_items[idx].clone())
                 .collect();
-            self.send_media_group(chat_id, &chunk_items, reply_markup_text.as_deref())?;
+            self.send_media_group(
+                chat_id,
+                &chunk_items,
+                reply_markup_text.as_deref(),
+                thread_id,
+            )?;
         }
 
         Ok(())
@@ -367,6 +401,7 @@ impl SendTg {
         chat_id: &str,
         items: &[MediaItem],
         reply_markup: Option<&str>,
+        thread_id: Option<i64>,
     ) -> Result<()> {
         let mut media_payload = Vec::new();
         let mut thumbnails: Vec<(String, Vec<u8>)> = Vec::new();
@@ -414,6 +449,10 @@ impl SendTg {
             .text("chat_id", chat_id.to_string())
             .text("media", serialized_media);
 
+        if let Some(id) = thread_id {
+            form = form.text("message_thread_id", id.to_string());
+        }
+
         if let Some(markup) = reply_markup {
             form = form.text("reply_markup", markup.to_string());
         }
@@ -436,10 +475,11 @@ impl SendTg {
 
         match self.handle_response("Failed to send media group:", response) {
             Ok(_) => {
+                let target = self.target_label(thread_id);
                 log_info!(
                     "{} items sent to {} as media group",
                     items.len(),
-                    self.chat_name
+                    target
                 );
                 Ok(())
             }
@@ -454,6 +494,7 @@ impl SendTg {
         caption: Option<&str>,
         reply_markup: Option<&str>,
         spoiler: bool,
+        thread_id: Option<i64>,
     ) -> Result<()> {
         let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
 
@@ -463,6 +504,10 @@ impl SendTg {
         );
 
         form = form.text("chat_id", chat_id.to_string());
+
+        if let Some(id) = thread_id {
+            form = form.text("message_thread_id", id.to_string());
+        }
 
         if item.media_type == "video" {
             form = form.text("supports_streaming", "true");
@@ -518,9 +563,10 @@ impl SendTg {
 
         match self.handle_response("Failed to send media file:", response) {
             Ok(_) => {
+                let target = self.target_label(thread_id);
                 log_info!(
                     "Single media file sent to {}: {}",
-                    self.chat_name,
+                    target,
                     item.file_name
                 );
                 Ok(())
@@ -529,15 +575,15 @@ impl SendTg {
         }
     }
 
-    fn send_chat_action(&mut self, chat_id: &str, action: &str) {
+    fn send_chat_action(&mut self, chat_id: &str, action: &str, thread_id: Option<i64>) {
         self.chat_name = "Unknown".to_string();
 
         let action_url = format!("{}{}/sendChatAction", self.api_url, self.bot_token);
-        let response = self
-            .client
-            .post(&action_url)
-            .form(&[("chat_id", chat_id), ("action", action)])
-            .send();
+        let mut form = vec![("chat_id".to_string(), chat_id.to_string()), ("action".to_string(), action.to_string())];
+        if let Some(id) = thread_id {
+            form.push(("message_thread_id".to_string(), id.to_string()));
+        }
+        let response = self.client.post(&action_url).form(&form).send();
 
         if let Err(err) = self.handle_response("Failed to send chat action:", response) {
             log_debug!("{}", err);
@@ -557,6 +603,7 @@ impl SendTg {
                 self.log_exception("Failed to get chat name:", &error, None, None);
             }
         }
+
     }
 
     fn apply_chat_name(&mut self, response: reqwest::blocking::Response) {
@@ -599,7 +646,7 @@ impl SendTg {
         }
     }
 
-    fn check(&mut self, chat_id: &str) -> Result<()> {
+    fn check(&mut self, chat_id: &str, thread_id: Option<i64>) -> Result<()> {
         let actions = [
             "typing",
             "upload_photo",
@@ -617,10 +664,14 @@ impl SendTg {
         let mut rng = StdRng::from_entropy();
         let action = actions[rng.gen_range(0..actions.len())];
 
-        let payload = json!({
+        let mut payload = json!({
             "chat_id": chat_id,
             "action": action,
         });
+
+        if let Some(id) = thread_id {
+            payload["message_thread_id"] = json!(id);
+        }
 
         let url = format!("{}{}/sendChatAction", self.api_url, self.bot_token);
         let start = Instant::now();
