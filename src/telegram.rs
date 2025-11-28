@@ -1,4 +1,4 @@
-use crate::args::Args;
+use crate::args::{Args, ButtonSpec};
 use crate::utils;
 use crate::{log_debug, log_error, log_info};
 use anyhow::{Result, anyhow};
@@ -75,8 +75,7 @@ impl SendTg {
                 args.caption.as_deref(),
                 args.as_file,
                 args.no_group,
-                args.button_text.clone(),
-                args.button_url.clone(),
+                &args.buttons,
                 args.spoiler,
                 args.thread_id,
             )?;
@@ -84,7 +83,7 @@ impl SendTg {
         }
 
         if let Some(message) = &args.message {
-            let reply_markup = utils::create_reply_markup(&args.button_text, &args.button_url);
+            let reply_markup = utils::create_reply_markup(&args.buttons);
             let chat_id = self.chat_id.clone();
             self.send_message(
                 &chat_id,
@@ -134,7 +133,7 @@ impl SendTg {
         let url = format!("{}{}/sendMessage", self.api_url, self.bot_token);
         let response = self.client.post(&url).json(&payload).send();
 
-            match self.handle_response("Failed to send message:", response) {
+        match self.handle_response("Failed to send message:", response) {
             Ok(_) => {
                 let target = self.target_label(thread_id);
                 log_info!("Message sent to {}: {}", target, message);
@@ -151,12 +150,11 @@ impl SendTg {
         caption: Option<&str>,
         as_file: bool,
         no_group: bool,
-        button_text: Option<String>,
-        button_url: Option<String>,
+        buttons: &[ButtonSpec],
         spoiler: bool,
         thread_id: Option<i64>,
     ) -> Result<()> {
-        let reply_markup_json = utils::create_reply_markup(&button_text, &button_url);
+        let reply_markup_json = utils::create_reply_markup(buttons);
         let reply_markup_text = reply_markup_json
             .as_ref()
             .and_then(|value| serde_json::to_string(value).ok());
@@ -476,11 +474,7 @@ impl SendTg {
         match self.handle_response("Failed to send media group:", response) {
             Ok(_) => {
                 let target = self.target_label(thread_id);
-                log_info!(
-                    "{} items sent to {} as media group",
-                    items.len(),
-                    target
-                );
+                log_info!("{} items sent to {} as media group", items.len(), target);
                 Ok(())
             }
             Err(err) => Err(err),
@@ -564,11 +558,7 @@ impl SendTg {
         match self.handle_response("Failed to send media file:", response) {
             Ok(_) => {
                 let target = self.target_label(thread_id);
-                log_info!(
-                    "Single media file sent to {}: {}",
-                    target,
-                    item.file_name
-                );
+                log_info!("Single media file sent to {}: {}", target, item.file_name);
                 Ok(())
             }
             Err(err) => Err(err),
@@ -579,7 +569,10 @@ impl SendTg {
         self.chat_name = "Unknown".to_string();
 
         let action_url = format!("{}{}/sendChatAction", self.api_url, self.bot_token);
-        let mut form = vec![("chat_id".to_string(), chat_id.to_string()), ("action".to_string(), action.to_string())];
+        let mut form = vec![
+            ("chat_id".to_string(), chat_id.to_string()),
+            ("action".to_string(), action.to_string()),
+        ];
         if let Some(id) = thread_id {
             form.push(("message_thread_id".to_string(), id.to_string()));
         }
@@ -603,7 +596,6 @@ impl SendTg {
                 self.log_exception("Failed to get chat name:", &error, None, None);
             }
         }
-
     }
 
     fn apply_chat_name(&mut self, response: reqwest::blocking::Response) {

@@ -70,8 +70,8 @@ Use `./target/release/sendtg --show-config` to print the stored values.
 | `--no-group`                | Send each media item individually (disables media albums).              |
 | `-F`, `--as-file`           | Force media to be sent as documents.                                    |
 | `-C`, `--caption <TEXT>`    | Caption applied to the first media item.                                |
-| `--button-text <TEXT>`      | Inline button text. Requires `--button-url`.                            |
-| `--button-url <URL>`        | Inline button target URL. Requires `--button-text`.                     |
+| `--button "LABEL\|URL"`     | Add an inline button; repeat for multiple buttons.                      |
+| `--button-row-break`        | Start a new inline keyboard row (use between `--button` flags).         |
 | `--silent`                  | Send the message without notifications.                                 |
 | `--check`                   | Measure Bot API latency by sending a random chat action.                |
 | `message`                   | Positional message when no media is provided.                           |
@@ -97,7 +97,7 @@ Send multiple photos as a media group with a caption:
 ./target/release/sendtg -m photo1.jpg photo2.jpg --caption "Weekend recap"
 ```
 
-Send a video silently with an inline button (overriding stored config):
+Send a video silently with inline buttons (overriding stored config):
 
 ```bash
 ./target/release/sendtg \
@@ -107,8 +107,10 @@ Send a video silently with an inline button (overriding stored config):
   -m clip.mp4 \
   --as-file \
   --silent \
-  --button-text "Watch more" \
-  --button-url "https://example.com"
+  --button "Watch more|https://example.com" \
+  --button "Status|https://status.example.com" \
+  --button-row-break \
+  --button "Support|https://example.com/help"
 ```
 
 Send a message to a specific forum topic inside a group:

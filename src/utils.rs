@@ -1,4 +1,5 @@
-use crate::{log_debug, log_error, log_info};
+use crate::args::ButtonSpec;
+use crate::{log_debug, log_info};
 use anyhow::{Context, anyhow};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use mime_guess::MimeGuess;
@@ -43,19 +44,36 @@ pub(crate) fn determine_media_type(mime_type: Option<&str>) -> &'static str {
     }
 }
 
-pub(crate) fn create_reply_markup(
-    button_text: &Option<String>,
-    button_url: &Option<String>,
-) -> Option<Value> {
-    match (button_text, button_url) {
-        (Some(text), Some(url)) => Some(json!({
-            "inline_keyboard": [[{"text": text, "url": url}]]
-        })),
-        (Some(_), None) | (None, Some(_)) => {
-            log_error!("Both button_text and button_url must be provided.");
-            None
+pub(crate) fn create_reply_markup(buttons: &[ButtonSpec]) -> Option<Value> {
+    if buttons.is_empty() {
+        return None;
+    }
+
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut current_row: Vec<Value> = Vec::new();
+
+    for button in buttons {
+        match button {
+            ButtonSpec::Link { text, url } => {
+                current_row.push(json!({ "text": text, "url": url }));
+            }
+            ButtonSpec::RowBreak => {
+                if !current_row.is_empty() {
+                    rows.push(current_row);
+                    current_row = Vec::new();
+                }
+            }
         }
-        (None, None) => None,
+    }
+
+    if !current_row.is_empty() {
+        rows.push(current_row);
+    }
+
+    if rows.is_empty() {
+        None
+    } else {
+        Some(json!({ "inline_keyboard": rows }))
     }
 }
 

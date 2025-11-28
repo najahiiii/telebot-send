@@ -3,6 +3,14 @@ use anyhow::{Result, anyhow};
 use clap::{ArgAction, Parser, builder::ValueHint};
 use std::path::PathBuf;
 
+const BUTTON_ROW_BREAK: &str = "__ROW_BREAK__";
+
+#[derive(Debug, Clone)]
+pub enum ButtonSpec {
+    Link { text: String, url: String },
+    RowBreak,
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "sendtg",
@@ -56,15 +64,27 @@ struct Cli {
     #[arg(short = 'C', long = "caption", help = "Caption to reuse across media.")]
     caption: Option<String>,
     #[arg(
+        long = "button",
+        alias = "button-row-break",
+        value_name = "LABEL|URL",
+        num_args = 0..=1,
+        default_missing_value = BUTTON_ROW_BREAK,
+        action = ArgAction::Append,
+        help = "Add inline button as 'Label|URL'. Use --button-row-break between buttons to start a new row."
+    )]
+    buttons: Vec<String>,
+    #[arg(
         long = "button-text",
         alias = "button_text",
-        help = "Inline button label."
+        hide = true,
+        help = "Deprecated: use --button \"Label|URL\" instead."
     )]
     button_text: Option<String>,
     #[arg(
         long = "button-url",
         alias = "button_url",
-        help = "URL that the inline button opens."
+        hide = true,
+        help = "Deprecated: use --button \"Label|URL\" instead."
     )]
     button_url: Option<String>,
     #[arg(long = "silent", help = "Disable notifications for the message.")]
@@ -92,8 +112,7 @@ pub struct Args {
     pub no_group: bool,
     pub as_file: bool,
     pub caption: Option<String>,
-    pub button_text: Option<String>,
-    pub button_url: Option<String>,
+    pub buttons: Vec<ButtonSpec>,
     pub message: Option<String>,
     pub check: bool,
     pub silent: bool,
@@ -169,6 +188,21 @@ impl Args {
             .or_else(|| file_config.chat_id.clone())
             .ok_or_else(|| anyhow!("Chat ID is missing from configuration"))?;
 
+        let mut buttons = parse_button_specs(&cli.buttons)?;
+
+        match (&cli.button_text, &cli.button_url) {
+            (Some(text), Some(url)) => buttons.push(ButtonSpec::Link {
+                text: text.clone(),
+                url: url.clone(),
+            }),
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(anyhow!(
+                    "Both --button-text and --button-url must be provided together, or use --button \"Label|URL\"."
+                ));
+            }
+            (None, None) => {}
+        }
+
         Ok(ParsedArgs::Run(Args {
             api_url,
             bot_token,
@@ -178,8 +212,7 @@ impl Args {
             no_group: cli.no_group,
             as_file: cli.as_file,
             caption: cli.caption.clone(),
-            button_text: cli.button_text.clone(),
-            button_url: cli.button_url.clone(),
+            buttons,
             message: cli.message.clone(),
             check: cli.check,
             silent: cli.silent,
@@ -189,4 +222,34 @@ impl Args {
             provided_chat_id: cli.chat_id.is_some(),
         }))
     }
+}
+
+fn parse_button_specs(raw: &[String]) -> Result<Vec<ButtonSpec>> {
+    let mut specs = Vec::new();
+
+    for entry in raw {
+        if entry == BUTTON_ROW_BREAK {
+            specs.push(ButtonSpec::RowBreak);
+            continue;
+        }
+
+        let mut parts = entry.splitn(2, '|');
+        let text = parts
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("Invalid --button value '{}': missing label", entry))?;
+        let url = parts
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("Invalid --button value '{}': expected 'Label|URL'", entry))?;
+
+        specs.push(ButtonSpec::Link {
+            text: text.to_string(),
+            url: url.to_string(),
+        });
+    }
+
+    Ok(specs)
 }
