@@ -49,6 +49,11 @@ struct Cli {
     #[arg(long = "spoiler", help = "Flag media as spoiler.")]
     spoiler: bool,
     #[arg(
+        long = "streaming",
+        help = "Set supports_streaming on videos so they can be played while downloading."
+    )]
+    streaming: bool,
+    #[arg(
         long = "no-group",
         alias = "no_group",
         help = "Send media one by one instead of an album."
@@ -109,6 +114,7 @@ pub struct Args {
     pub chat_id: String,
     pub media_paths: Vec<PathBuf>,
     pub spoiler: bool,
+    pub streaming: bool,
     pub no_group: bool,
     pub as_file: bool,
     pub caption: Option<String>,
@@ -209,6 +215,7 @@ impl Args {
             chat_id,
             media_paths: cli.media.clone(),
             spoiler: cli.spoiler,
+            streaming: cli.streaming,
             no_group: cli.no_group,
             as_file: cli.as_file,
             caption: cli.caption.clone(),

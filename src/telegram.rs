@@ -77,6 +77,7 @@ impl SendTg {
                 args.no_group,
                 &args.buttons,
                 args.spoiler,
+                args.streaming,
                 args.thread_id,
             )?;
             return Ok(());
@@ -152,6 +153,7 @@ impl SendTg {
         no_group: bool,
         buttons: &[ButtonSpec],
         spoiler: bool,
+        streaming: bool,
         thread_id: Option<i64>,
     ) -> Result<()> {
         let reply_markup_json = utils::create_reply_markup(buttons);
@@ -301,6 +303,7 @@ impl SendTg {
                         caption_to_use,
                         reply_markup_text.as_deref(),
                         item.spoiler,
+                        streaming,
                         thread_id,
                     )?;
                     index += 1;
@@ -326,6 +329,7 @@ impl SendTg {
                         caption_to_use,
                         reply_markup_text.as_deref(),
                         item.spoiler,
+                        streaming,
                         thread_id,
                     )?;
                     continue;
@@ -340,6 +344,7 @@ impl SendTg {
                     chat_id,
                     &chunk_items,
                     reply_markup_text.as_deref(),
+                    streaming,
                     thread_id,
                 )?;
                 continue;
@@ -370,6 +375,7 @@ impl SendTg {
                         caption_to_use,
                         reply_markup_text.as_deref(),
                         item.spoiler,
+                        streaming,
                         thread_id,
                     )?;
                 }
@@ -387,6 +393,7 @@ impl SendTg {
                 chat_id,
                 &chunk_items,
                 reply_markup_text.as_deref(),
+                streaming,
                 thread_id,
             )?;
         }
@@ -399,6 +406,7 @@ impl SendTg {
         chat_id: &str,
         items: &[MediaItem],
         reply_markup: Option<&str>,
+        streaming: bool,
         thread_id: Option<i64>,
     ) -> Result<()> {
         let mut media_payload = Vec::new();
@@ -414,7 +422,12 @@ impl SendTg {
                 height: None,
                 duration: None,
                 thumbnail: None,
+                supports_streaming: None,
             };
+
+            if streaming && item.media_type == "video" {
+                entry.supports_streaming = Some(true);
+            }
 
             if let Some(metadata) = item.metadata.as_ref() {
                 match metadata {
@@ -488,6 +501,7 @@ impl SendTg {
         caption: Option<&str>,
         reply_markup: Option<&str>,
         spoiler: bool,
+        streaming: bool,
         thread_id: Option<i64>,
     ) -> Result<()> {
         let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
@@ -503,7 +517,7 @@ impl SendTg {
             form = form.text("message_thread_id", id.to_string());
         }
 
-        if item.media_type == "video" {
+        if streaming && item.media_type == "video" {
             form = form.text("supports_streaming", "true");
         }
 
@@ -744,6 +758,8 @@ struct InputMedia {
     duration: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thumbnail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    supports_streaming: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]

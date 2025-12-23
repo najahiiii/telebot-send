@@ -57,24 +57,25 @@ Use `./target/release/sendtg --show-config` to print the stored values.
 
 ## Command-line reference
 
-| Flag                        | Description                                                             |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `--setup`                   | Store credentials in the config file and exit.                          |
-| `--show-config`             | Print current configuration values and exit.                            |
-| `-a`, `--api_url <URL>`     | Override the Bot API base URL (default `https://api.telegram.org/bot`). |
-| `-t`, `--bot_token <TOKEN>` | Override the bot token.                                                 |
-| `-c`, `--chat_id <ID>`      | Override the target chat ID/channel username.                           |
-| `--thread-id <ID>`          | Target a specific forum topic (message thread ID) inside a group.       |
-| `-m`, `--media <PATH>...`   | Attach one or more media files.                                         |
-| `--spoiler`                 | Mark supported media with Telegram’s spoiler animation.                 |
-| `--no-group`                | Send each media item individually (disables media albums).              |
-| `-F`, `--as-file`           | Force media to be sent as documents.                                    |
-| `-C`, `--caption <TEXT>`    | Caption applied to the first media item.                                |
-| `--button "LABEL\|URL"`     | Add an inline button; repeat for multiple buttons.                      |
-| `--button-row-break`        | Start a new inline keyboard row (use between `--button` flags).         |
-| `--silent`                  | Send the message without notifications.                                 |
-| `--check`                   | Measure Bot API latency by sending a random chat action.                |
-| `message`                   | Positional message when no media is provided.                           |
+| Flag                        | Description                                                               |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `--setup`                   | Store credentials in the config file and exit.                            |
+| `--show-config`             | Print current configuration values and exit.                              |
+| `-a`, `--api_url <URL>`     | Override the Bot API base URL (default `https://api.telegram.org/bot`).   |
+| `-t`, `--bot_token <TOKEN>` | Override the bot token.                                                   |
+| `-c`, `--chat_id <ID>`      | Override the target chat ID/channel username.                             |
+| `--thread-id <ID>`          | Target a specific forum topic (message thread ID) inside a group.         |
+| `-m`, `--media <PATH>...`   | Attach one or more media files.                                           |
+| `--spoiler`                 | Mark supported media with Telegram’s spoiler animation.                   |
+| `--streaming`               | Set `supports_streaming` on videos so clients can play while downloading. |
+| `--no-group`                | Send each media item individually (disables media albums).                |
+| `-F`, `--as-file`           | Force media to be sent as documents.                                      |
+| `-C`, `--caption <TEXT>`    | Caption applied to the first media item.                                  |
+| `--button "LABEL\|URL"`     | Add an inline button; repeat for multiple buttons.                        |
+| `--button-row-break`        | Start a new inline keyboard row (use between `--button` flags).           |
+| `--silent`                  | Send the message without notifications.                                   |
+| `--check`                   | Measure Bot API latency by sending a random chat action.                  |
+| `message`                   | Positional message when no media is provided.                             |
 
 ### Notes
 
