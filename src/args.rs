@@ -54,6 +54,12 @@ struct Cli {
     )]
     streaming: bool,
     #[arg(
+        long = "delay",
+        value_name = "SECONDS",
+        help = "Delay (seconds) between media requests to reduce rate limiting."
+    )]
+    delay_secs: Option<u64>,
+    #[arg(
         long = "no-group",
         alias = "no_group",
         help = "Send media one by one instead of an album."
@@ -115,6 +121,7 @@ pub struct Args {
     pub media_paths: Vec<PathBuf>,
     pub spoiler: bool,
     pub streaming: bool,
+    pub delay_secs: Option<u64>,
     pub no_group: bool,
     pub as_file: bool,
     pub caption: Option<String>,
@@ -216,6 +223,7 @@ impl Args {
             media_paths: cli.media.clone(),
             spoiler: cli.spoiler,
             streaming: cli.streaming,
+            delay_secs: cli.delay_secs,
             no_group: cli.no_group,
             as_file: cli.as_file,
             caption: cli.caption.clone(),

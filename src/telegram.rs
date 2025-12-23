@@ -8,7 +8,7 @@ use reqwest::blocking::{Client, multipart};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const PHOTO_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -78,6 +78,7 @@ impl SendTg {
                 &args.buttons,
                 args.spoiler,
                 args.streaming,
+                args.delay_secs,
                 args.thread_id,
             )?;
             return Ok(());
@@ -154,6 +155,7 @@ impl SendTg {
         buttons: &[ButtonSpec],
         spoiler: bool,
         streaming: bool,
+        delay_secs: Option<u64>,
         thread_id: Option<i64>,
     ) -> Result<()> {
         let reply_markup_json = utils::create_reply_markup(buttons);
@@ -163,6 +165,17 @@ impl SendTg {
 
         let mut media_items = Vec::new();
         let mut caption_assigned = false;
+        let mut send_calls = 0usize;
+        let delay = delay_secs.unwrap_or(0);
+        let maybe_delay = |calls: usize| {
+            if calls > 0 && delay > 0 {
+                log_info!(
+                    "Waiting {} s before next media request to reduce rate limiting",
+                    delay
+                );
+                std::thread::sleep(Duration::from_secs(delay));
+            }
+        };
 
         for path in media_paths {
             if !utils::is_regular_file(path) {
@@ -297,6 +310,7 @@ impl SendTg {
                     let item = &media_items[index];
                     self.send_chat_action(chat_id, "upload_document", thread_id);
                     let caption_to_use = item.caption.as_deref().or(caption);
+                    maybe_delay(send_calls);
                     self.send_single_media(
                         chat_id,
                         item,
@@ -306,6 +320,7 @@ impl SendTg {
                         streaming,
                         thread_id,
                     )?;
+                    send_calls += 1;
                     index += 1;
                     continue;
                 }
@@ -323,6 +338,7 @@ impl SendTg {
                     let item = &media_items[chunk_indices[0]];
                     self.send_chat_action(chat_id, "upload_document", thread_id);
                     let caption_to_use = item.caption.as_deref().or(caption);
+                    maybe_delay(send_calls);
                     self.send_single_media(
                         chat_id,
                         item,
@@ -332,6 +348,7 @@ impl SendTg {
                         streaming,
                         thread_id,
                     )?;
+                    send_calls += 1;
                     continue;
                 }
 
@@ -340,6 +357,7 @@ impl SendTg {
                     .iter()
                     .map(|&idx| media_items[idx].clone())
                     .collect();
+                maybe_delay(send_calls);
                 self.send_media_group(
                     chat_id,
                     &chunk_items,
@@ -347,6 +365,7 @@ impl SendTg {
                     streaming,
                     thread_id,
                 )?;
+                send_calls += 1;
                 continue;
             }
 
@@ -369,6 +388,7 @@ impl SendTg {
                     let action = format!("upload_{}", item.media_type.to_lowercase());
                     self.send_chat_action(chat_id, &action, thread_id);
                     let caption_to_use = item.caption.as_deref().or(caption);
+                    maybe_delay(send_calls);
                     self.send_single_media(
                         chat_id,
                         item,
@@ -378,6 +398,7 @@ impl SendTg {
                         streaming,
                         thread_id,
                     )?;
+                    send_calls += 1;
                 }
                 continue;
             }
@@ -389,6 +410,7 @@ impl SendTg {
                 .iter()
                 .map(|&idx| media_items[idx].clone())
                 .collect();
+            maybe_delay(send_calls);
             self.send_media_group(
                 chat_id,
                 &chunk_items,
@@ -396,6 +418,7 @@ impl SendTg {
                 streaming,
                 thread_id,
             )?;
+            send_calls += 1;
         }
 
         Ok(())

@@ -68,6 +68,7 @@ Use `./target/release/sendtg --show-config` to print the stored values.
 | `-m`, `--media <PATH>...`   | Attach one or more media files.                                           |
 | `--spoiler`                 | Mark supported media with Telegram’s spoiler animation.                   |
 | `--streaming`               | Set `supports_streaming` on videos so clients can play while downloading. |
+| `--delay <SECONDS>`         | Pause between media requests (seconds) to ease Telegram rate limits.      |
 | `--no-group`                | Send each media item individually (disables media albums).                |
 | `-F`, `--as-file`           | Force media to be sent as documents.                                      |
 | `-C`, `--caption <TEXT>`    | Caption applied to the first media item.                                  |
