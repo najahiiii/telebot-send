@@ -477,44 +477,40 @@ impl SendTg {
             media_payload.push(entry);
         }
 
-        let serialized_media = serde_json::to_string(&media_payload)?;
-
-        let mut form = multipart::Form::new()
-            .text("chat_id", chat_id.to_string())
-            .text("media", serialized_media);
-
-        if let Some(id) = thread_id {
-            form = form.text("message_thread_id", id.to_string());
-        }
-
-        if let Some(markup) = reply_markup {
-            form = form.text("reply_markup", markup.to_string());
-        }
-
-        for item in items {
-            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
-            let part = multipart::Part::reader(reader).file_name(item.file_name.clone());
-            form = form.part(item.part_name.clone(), part);
-        }
-
-        for (name, bytes) in thumbnails {
-            let part = multipart::Part::bytes(bytes)
-                .file_name(format!("{}.jpg", name))
-                .mime_str("image/jpeg")?;
-            form = form.part(name, part);
-        }
-
         let url = format!("{}{}/sendMediaGroup", self.api_url, self.bot_token);
-        let response = self.client.post(&url).multipart(form).send();
+        self.send_multipart_with_retry("Failed to send media group:", &url, || {
+            // Rebuild the multipart form each attempt to keep streams fresh.
+            let mut rebuilt_form = multipart::Form::new()
+                .text("chat_id", chat_id.to_string())
+                .text("media", serde_json::to_string(&media_payload)?);
 
-        match self.handle_response("Failed to send media group:", response) {
-            Ok(_) => {
-                let target = self.target_label(thread_id);
-                log_info!("{} items sent to {} as media group", items.len(), target);
-                Ok(())
+            if let Some(id) = thread_id {
+                rebuilt_form = rebuilt_form.text("message_thread_id", id.to_string());
             }
-            Err(err) => Err(err),
-        }
+
+            if let Some(markup) = reply_markup {
+                rebuilt_form = rebuilt_form.text("reply_markup", markup.to_string());
+            }
+
+            for item in items {
+                let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
+                let part = multipart::Part::reader(reader).file_name(item.file_name.clone());
+                rebuilt_form = rebuilt_form.part(item.part_name.clone(), part);
+            }
+
+            for (name, bytes) in &thumbnails {
+                let part = multipart::Part::bytes(bytes.clone())
+                    .file_name(format!("{}.jpg", name))
+                    .mime_str("image/jpeg")?;
+                rebuilt_form = rebuilt_form.part(name.clone(), part);
+            }
+
+            Ok(rebuilt_form)
+        })?;
+
+        let target = self.target_label(thread_id);
+        log_info!("{} items sent to {} as media group", items.len(), target);
+        Ok(())
     }
 
     fn send_single_media(
@@ -527,79 +523,76 @@ impl SendTg {
         streaming: bool,
         thread_id: Option<i64>,
     ) -> Result<()> {
-        let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
-
-        let mut form = multipart::Form::new().part(
-            item.media_type.clone(),
-            multipart::Part::reader(reader).file_name(item.file_name.clone()),
-        );
-
-        form = form.text("chat_id", chat_id.to_string());
-
-        if let Some(id) = thread_id {
-            form = form.text("message_thread_id", id.to_string());
-        }
-
-        if streaming && item.media_type == "video" {
-            form = form.text("supports_streaming", "true");
-        }
-
-        if let Some(metadata) = item.metadata.as_ref() {
-            match metadata {
-                utils::MediaMetadata::Video(video_meta) => {
-                    if let Some(duration) = video_meta.duration {
-                        form = form.text("duration", duration.to_string());
-                    }
-                    if let Some(width) = video_meta.width {
-                        form = form.text("width", width.to_string());
-                    }
-                    if let Some(height) = video_meta.height {
-                        form = form.text("height", height.to_string());
-                    }
-                    if let Some(bytes) = video_meta.thumbnail.as_ref() {
-                        let part = multipart::Part::bytes(bytes.clone())
-                            .file_name("thumbnail.jpg")
-                            .mime_str("image/jpeg")?;
-                        form = form.part("thumbnail", part);
-                    }
-                }
-                utils::MediaMetadata::Photo { thumbnail } => {
-                    if let Some(bytes) = thumbnail.as_ref() {
-                        let part = multipart::Part::bytes(bytes.clone())
-                            .file_name("thumbnail.jpg")
-                            .mime_str("image/jpeg")?;
-                        form = form.part("thumbnail", part);
-                    }
-                }
-            }
-        }
-
-        if let Some(caption) = caption {
-            form = form.text("caption", caption.to_string());
-        }
-        if let Some(markup) = reply_markup {
-            form = form.text("reply_markup", markup.to_string());
-        }
-        if spoiler && matches!(item.media_type.as_str(), "photo" | "video") {
-            form = form.text("has_spoiler", "true".to_string());
-        }
-
         let endpoint = format!(
             "{}{}/send{}",
             self.api_url,
             self.bot_token,
             utils::capitalize(&item.media_type)
         );
-        let response = self.client.post(&endpoint).multipart(form).send();
+        self.send_multipart_with_retry("Failed to send media file:", &endpoint, || {
+            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
 
-        match self.handle_response("Failed to send media file:", response) {
-            Ok(_) => {
-                let target = self.target_label(thread_id);
-                log_info!("Single media file sent to {}: {}", target, item.file_name);
-                Ok(())
+            let mut fresh_form = multipart::Form::new().part(
+                item.media_type.clone(),
+                multipart::Part::reader(reader).file_name(item.file_name.clone()),
+            );
+
+            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
+
+            if let Some(id) = thread_id {
+                fresh_form = fresh_form.text("message_thread_id", id.to_string());
             }
-            Err(err) => Err(err),
-        }
+
+            if streaming && item.media_type == "video" {
+                fresh_form = fresh_form.text("supports_streaming", "true");
+            }
+
+            if let Some(metadata) = item.metadata.as_ref() {
+                match metadata {
+                    utils::MediaMetadata::Video(video_meta) => {
+                        if let Some(duration) = video_meta.duration {
+                            fresh_form = fresh_form.text("duration", duration.to_string());
+                        }
+                        if let Some(width) = video_meta.width {
+                            fresh_form = fresh_form.text("width", width.to_string());
+                        }
+                        if let Some(height) = video_meta.height {
+                            fresh_form = fresh_form.text("height", height.to_string());
+                        }
+                        if let Some(bytes) = video_meta.thumbnail.as_ref() {
+                            let part = multipart::Part::bytes(bytes.clone())
+                                .file_name("thumbnail.jpg")
+                                .mime_str("image/jpeg")?;
+                            fresh_form = fresh_form.part("thumbnail", part);
+                        }
+                    }
+                    utils::MediaMetadata::Photo { thumbnail } => {
+                        if let Some(bytes) = thumbnail.as_ref() {
+                            let part = multipart::Part::bytes(bytes.clone())
+                                .file_name("thumbnail.jpg")
+                                .mime_str("image/jpeg")?;
+                            fresh_form = fresh_form.part("thumbnail", part);
+                        }
+                    }
+                }
+            }
+
+            if let Some(caption) = caption {
+                fresh_form = fresh_form.text("caption", caption.to_string());
+            }
+            if let Some(markup) = reply_markup {
+                fresh_form = fresh_form.text("reply_markup", markup.to_string());
+            }
+            if spoiler && matches!(item.media_type.as_str(), "photo" | "video") {
+                fresh_form = fresh_form.text("has_spoiler", "true".to_string());
+            }
+
+            Ok(fresh_form)
+        })?;
+
+        let target = self.target_label(thread_id);
+        log_info!("Single media file sent to {}: {}", target, item.file_name);
+        Ok(())
     }
 
     fn send_chat_action(&mut self, chat_id: &str, action: &str, thread_id: Option<i64>) {
@@ -761,6 +754,101 @@ impl SendTg {
                 log_debug!("HTTP Status Code: {}, Response: {}", status.as_u16(), body);
             }
         }
+    }
+
+    fn send_multipart_with_retry<F>(
+        &self,
+        context: &str,
+        endpoint: &str,
+        build_form: F,
+    ) -> Result<String>
+    where
+        F: Fn() -> Result<multipart::Form>,
+    {
+        let mut attempt = 0;
+        let max_retries = 3;
+
+        loop {
+            let form = build_form()?;
+            let response = self.client.post(endpoint).multipart(form).send();
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().unwrap_or_default();
+                    if status.is_success() {
+                        return Ok(text);
+                    }
+
+                    if attempt < max_retries {
+                        if let Some(wait) = Self::retry_after_secs(status, &text) {
+                            attempt += 1;
+                            log_info!(
+                                "Rate limited: retrying in {} s (attempt {} of {})",
+                                wait,
+                                attempt,
+                                max_retries
+                            );
+                            std::thread::sleep(Duration::from_secs(wait));
+                            continue;
+                        }
+                    }
+
+                    let err = anyhow!("telegram API returned status {}", status);
+                    self.log_exception(context, &err, Some(status), Some(&text));
+                    return Err(err);
+                }
+                Err(err) => {
+                    let error = anyhow!(err);
+                    self.log_exception(context, &error, None, None);
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    fn retry_after_secs(status: StatusCode, body: &str) -> Option<u64> {
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            if let Some(val) = Self::retry_after_from_body(body) {
+                return Some(val);
+            }
+            return Some(1);
+        }
+
+        if body.to_ascii_lowercase().contains("too many requests") {
+            if let Some(val) = Self::retry_after_from_body(body) {
+                return Some(val);
+            }
+        }
+
+        None
+    }
+
+    fn retry_after_from_body(body: &str) -> Option<u64> {
+        if let Ok(value) = serde_json::from_str::<Value>(body) {
+            if let Some(val) = value
+                .get("parameters")
+                .and_then(|p| p.get("retry_after"))
+                .and_then(|v| v.as_u64())
+            {
+                return Some(val);
+            }
+        }
+
+        let needle = "retry after";
+        if let Some(idx) = body.to_ascii_lowercase().find(needle) {
+            let tail = &body[idx + needle.len()..];
+            for token in tail.split(|c: char| !c.is_ascii_digit()) {
+                if token.is_empty() {
+                    continue;
+                }
+                if let Ok(val) = token.parse::<u64>() {
+                    return Some(val);
+                }
+            }
+        }
+
+        None
     }
 }
 
