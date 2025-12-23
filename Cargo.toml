@@ -17,6 +17,9 @@ rand = "0.8"
 toml = "0.8"
 indicatif = "0.17"
 
+[build-dependencies]
+time = { version = "0.3", features = ["formatting"] }
+
 [profile.release]
 opt-level = "s"
 debug = false

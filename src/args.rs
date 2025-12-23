@@ -13,8 +13,8 @@ pub enum ButtonSpec {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "sendtg",
-    version = crate::config::VERSION,
+    name = "sendtg:",
+    version = crate::config::VERSION_SUMMARY,
     about = "Send text or media through the Telegram Bot API.",
 )]
 struct Cli {

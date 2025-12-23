@@ -4,7 +4,19 @@ use std::path::PathBuf;
 
 #[allow(dead_code)]
 pub const URL: &str = "https://github.com/najahiiii/telebot-send";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION_SUMMARY: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\nRust: ",
+    env!("SENDTG_CLI_RUSTC_VERSION"),
+    "\nOS/Arch: ",
+    env!("SENDTG_CLI_TARGET_OS"),
+    "/",
+    env!("SENDTG_CLI_TARGET_ARCH"),
+    "\nCommit: ",
+    env!("SENDTG_CLI_GIT_COMMIT"),
+    "\nBuilt: ",
+    env!("SENDTG_CLI_BUILD_TIME")
+);
 
 pub const CONFIG_DIR: &str = ".config/sendtg";
 pub const CONFIG_FILE: &str = "config.toml";
