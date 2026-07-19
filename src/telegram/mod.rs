@@ -1,17 +1,18 @@
-use crate::args::{Args, ButtonSpec};
+mod media;
+mod message;
+pub mod types;
+
+use crate::args::Args;
 use crate::utils;
 use crate::{log_debug, log_error, log_info};
 use anyhow::{Result, anyhow};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, multipart};
-use serde::Serialize;
-use serde_json::{Value, json};
-use std::path::PathBuf;
+use serde_json::Value;
 use std::time::{Duration, Instant};
 
 const PHOTO_MAX_BYTES: u64 = 10 * 1024 * 1024;
-const VIDEO_NOTE_MAX_BYTES: u64 = 12 * 1024 * 1024;
 
 pub struct SendTg {
     api_url: String,
@@ -103,66 +104,30 @@ impl SendTg {
         Err(anyhow!("No message or media provided."))
     }
 
-    fn target_label(&self, thread_id: Option<i64>) -> String {
+    pub(super) fn target_label(&self, thread_id: Option<i64>) -> String {
         if let Some(id) = thread_id {
             return format!("{} · Topic #{}", self.chat_name, id);
         }
         self.chat_name.clone()
     }
 
-    fn send_message(
-        &mut self,
-        chat_id: &str,
-        message: &str,
-        silent: bool,
-        reply_markup: Option<&Value>,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        self.send_chat_action(chat_id, "typing", thread_id);
-
-        let mut payload = json!({
-            "chat_id": chat_id,
-            "text": message.replace("\\n", "\n"),
-            "parse_mode": "HTML",
-            "disable_notification": silent,
-        });
-
-        if let Some(id) = thread_id {
-            payload["message_thread_id"] = json!(id);
-        }
-
-        if let Some(markup) = reply_markup {
-            payload["reply_markup"] = markup.clone();
-        }
-
-        let url = format!("{}{}/sendMessage", self.api_url, self.bot_token);
-        let response = self.client.post(&url).json(&payload).send();
-
-        match self.handle_response("Failed to send message:", response) {
-            Ok(_) => {
-                let target = self.target_label(thread_id);
-                log_info!("Message sent to {}: {}", target, message);
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
-    }
-
     fn send_media(
         &mut self,
         chat_id: &str,
-        media_paths: &[PathBuf],
+        media_paths: &[std::path::PathBuf],
         caption: Option<&str>,
         as_file: bool,
         video_note: bool,
         voice: bool,
         no_group: bool,
-        buttons: &[ButtonSpec],
+        buttons: &[crate::args::ButtonSpec],
         spoiler: bool,
         streaming: bool,
         delay_secs: Option<u64>,
         thread_id: Option<i64>,
     ) -> Result<()> {
+        use types::MediaItem;
+
         let reply_markup_json = utils::create_reply_markup(buttons);
         let reply_markup_text = reply_markup_json
             .as_ref()
@@ -211,7 +176,7 @@ impl SendTg {
                 continue;
             }
 
-            let mut converted_path: Option<PathBuf> = None;
+            let mut converted_path: Option<std::path::PathBuf> = None;
             if voice && !utils::is_ogg(mime_type.as_deref()) {
                 match utils::convert_to_ogg(path) {
                     Ok(Some(ogg_path)) => {
@@ -568,436 +533,6 @@ impl SendTg {
         Ok(())
     }
 
-    fn send_media_group(
-        &self,
-        chat_id: &str,
-        items: &[MediaItem],
-        reply_markup: Option<&str>,
-        streaming: bool,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        let mut media_payload = Vec::new();
-        let mut thumbnails: Vec<(String, Vec<u8>)> = Vec::new();
-
-        for item in items {
-            let mut entry = InputMedia {
-                media_type: item.media_type.clone(),
-                media: format!("attach://{}", item.part_name),
-                caption: item.caption.clone(),
-                has_spoiler: if item.spoiler { Some(true) } else { None },
-                width: None,
-                height: None,
-                duration: None,
-                thumbnail: None,
-                supports_streaming: None,
-            };
-
-            if streaming && item.media_type == "video" {
-                entry.supports_streaming = Some(true);
-            }
-
-            if let Some(metadata) = item.metadata.as_ref() {
-                match metadata {
-                    utils::MediaMetadata::Video(video_meta) => {
-                        entry.width = video_meta.width;
-                        entry.height = video_meta.height;
-                        entry.duration = video_meta.duration;
-                        if let Some(bytes) = video_meta.thumbnail.as_ref() {
-                            let name = format!("{}_thumb", item.part_name);
-                            entry.thumbnail = Some(format!("attach://{}", name));
-                            thumbnails.push((name, bytes.clone()));
-                        }
-                    }
-                    utils::MediaMetadata::Photo { thumbnail } => {
-                        if let Some(bytes) = thumbnail.as_ref() {
-                            let name = format!("{}_thumb", item.part_name);
-                            entry.thumbnail = Some(format!("attach://{}", name));
-                            thumbnails.push((name, bytes.clone()));
-                        }
-                    }
-                }
-            }
-
-            media_payload.push(entry);
-        }
-
-        let url = format!("{}{}/sendMediaGroup", self.api_url, self.bot_token);
-        self.send_multipart_with_retry("Failed to send media group:", &url, || {
-            // Rebuild the multipart form each attempt to keep streams fresh.
-            let mut rebuilt_form = multipart::Form::new()
-                .text("chat_id", chat_id.to_string())
-                .text("media", serde_json::to_string(&media_payload)?);
-
-            if let Some(id) = thread_id {
-                rebuilt_form = rebuilt_form.text("message_thread_id", id.to_string());
-            }
-
-            if let Some(markup) = reply_markup {
-                rebuilt_form = rebuilt_form.text("reply_markup", markup.to_string());
-            }
-
-            for item in items {
-                let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
-                let part = multipart::Part::reader(reader).file_name(item.file_name.clone());
-                rebuilt_form = rebuilt_form.part(item.part_name.clone(), part);
-            }
-
-            for (name, bytes) in &thumbnails {
-                let part = multipart::Part::bytes(bytes.clone())
-                    .file_name(format!("{}.jpg", name))
-                    .mime_str("image/jpeg")?;
-                rebuilt_form = rebuilt_form.part(name.clone(), part);
-            }
-
-            Ok(rebuilt_form)
-        })?;
-
-        let target = self.target_label(thread_id);
-        log_info!("{} items sent to {} as media group", items.len(), target);
-        Ok(())
-    }
-
-    fn send_animation(
-        &self,
-        chat_id: &str,
-        item: &MediaItem,
-        caption: Option<&str>,
-        reply_markup: Option<&str>,
-        spoiler: bool,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        let endpoint = format!("{}{}/sendAnimation", self.api_url, self.bot_token);
-        self.send_multipart_with_retry("Failed to send animation:", &endpoint, || {
-            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
-
-            let mut fresh_form = multipart::Form::new().part(
-                "animation",
-                multipart::Part::reader(reader).file_name(item.file_name.clone()),
-            );
-
-            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
-
-            if let Some(id) = thread_id {
-                fresh_form = fresh_form.text("message_thread_id", id.to_string());
-            }
-
-            if let Some(metadata) = item.metadata.as_ref() {
-                if let utils::MediaMetadata::Video(video_meta) = metadata {
-                    if let Some(duration) = video_meta.duration {
-                        fresh_form = fresh_form.text("duration", duration.to_string());
-                    }
-                    if let Some(width) = video_meta.width {
-                        fresh_form = fresh_form.text("width", width.to_string());
-                    }
-                    if let Some(height) = video_meta.height {
-                        fresh_form = fresh_form.text("height", height.to_string());
-                    }
-                    if let Some(bytes) = video_meta.thumbnail.as_ref() {
-                        let part = multipart::Part::bytes(bytes.clone())
-                            .file_name("thumbnail.jpg")
-                            .mime_str("image/jpeg")?;
-                        fresh_form = fresh_form.part("thumbnail", part);
-                    }
-                }
-            }
-
-            if let Some(caption) = caption {
-                fresh_form = fresh_form.text("caption", caption.to_string());
-            }
-            if let Some(markup) = reply_markup {
-                fresh_form = fresh_form.text("reply_markup", markup.to_string());
-            }
-            if spoiler {
-                fresh_form = fresh_form.text("has_spoiler", "true".to_string());
-            }
-
-            Ok(fresh_form)
-        })?;
-
-        let target = self.target_label(thread_id);
-        log_info!("Animation sent to {}: {}", target, item.file_name);
-        Ok(())
-    }
-
-    fn send_voice(
-        &self,
-        chat_id: &str,
-        item: &MediaItem,
-        caption: Option<&str>,
-        reply_markup: Option<&str>,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        let endpoint = format!("{}{}/sendVoice", self.api_url, self.bot_token);
-        self.send_multipart_with_retry("Failed to send voice:", &endpoint, || {
-            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
-
-            let mut fresh_form = multipart::Form::new().part(
-                "voice",
-                multipart::Part::reader(reader).file_name(item.file_name.clone()),
-            );
-
-            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
-
-            if let Some(id) = thread_id {
-                fresh_form = fresh_form.text("message_thread_id", id.to_string());
-            }
-
-            if let Some(metadata) = item.metadata.as_ref() {
-                if let utils::MediaMetadata::Video(video_meta) = metadata {
-                    if let Some(duration) = video_meta.duration {
-                        fresh_form = fresh_form.text("duration", duration.to_string());
-                        log_debug!("Voice duration: {}s", duration);
-                    }
-                }
-            }
-
-            if let Some(caption) = caption {
-                fresh_form = fresh_form.text("caption", caption.to_string());
-            }
-            if let Some(markup) = reply_markup {
-                fresh_form = fresh_form.text("reply_markup", markup.to_string());
-            }
-
-            Ok(fresh_form)
-        })?;
-
-        let target = self.target_label(thread_id);
-        log_info!("Voice message sent to {}: {}", target, item.file_name);
-        Ok(())
-    }
-
-    fn send_video_note(
-        &self,
-        chat_id: &str,
-        item: &MediaItem,
-        reply_markup: Option<&str>,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        let file_size = std::fs::metadata(&item.path).map(|m| m.len()).unwrap_or(0);
-        let effective_path = if file_size > VIDEO_NOTE_MAX_BYTES {
-            let duration = item.metadata.as_ref().and_then(|m| match m {
-                utils::MediaMetadata::Video(v) => v.duration,
-                _ => None,
-            });
-            match utils::compress_video_for_note(&item.path, VIDEO_NOTE_MAX_BYTES, duration) {
-                Ok(Some(compressed)) => compressed,
-                Ok(None) => item.path.clone(),
-                Err(err) => {
-                    log_error!("Failed to compress video for note: {}", err);
-                    item.path.clone()
-                }
-            }
-        } else {
-            item.path.clone()
-        };
-
-        let effective_name = effective_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&item.file_name)
-            .to_string();
-
-        let endpoint = format!("{}{}/sendVideoNote", self.api_url, self.bot_token);
-        self.send_multipart_with_retry("Failed to send video note:", &endpoint, || {
-            let reader = utils::progress_reader_for_path(&effective_path, &effective_name)?;
-
-            let mut fresh_form = multipart::Form::new().part(
-                "video_note",
-                multipart::Part::reader(reader).file_name(effective_name.clone()),
-            );
-
-            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
-
-            if let Some(id) = thread_id {
-                fresh_form = fresh_form.text("message_thread_id", id.to_string());
-            }
-
-            if let Some(metadata) = item.metadata.as_ref() {
-                if let utils::MediaMetadata::Video(video_meta) = metadata {
-                    if let Some(duration) = video_meta.duration {
-                        let capped = duration.min(60);
-                        fresh_form = fresh_form.text("duration", capped.to_string());
-                    }
-                    if let Some(bytes) = video_meta.thumbnail.as_ref() {
-                        let part = multipart::Part::bytes(bytes.clone())
-                            .file_name("thumbnail.jpg")
-                            .mime_str("image/jpeg")?;
-                        fresh_form = fresh_form.part("thumbnail", part);
-                    }
-                }
-            }
-
-            let length = if effective_path != item.path {
-                360
-            } else {
-                item.metadata
-                    .as_ref()
-                    .and_then(|m| match m {
-                        utils::MediaMetadata::Video(v) => v.width.or(v.height),
-                        _ => None,
-                    })
-                    .unwrap_or(360)
-            };
-            fresh_form = fresh_form.text("length", length.to_string());
-
-            if let Some(markup) = reply_markup {
-                fresh_form = fresh_form.text("reply_markup", markup.to_string());
-            }
-
-            Ok(fresh_form)
-        })?;
-
-        let target = self.target_label(thread_id);
-        log_info!("Video note sent to {}: {}", target, item.file_name);
-        Ok(())
-    }
-
-    fn send_live_photo(
-        &self,
-        chat_id: &str,
-        photo_item: &MediaItem,
-        video_item: &MediaItem,
-        caption: Option<&str>,
-        reply_markup: Option<&str>,
-        spoiler: bool,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        let endpoint = format!("{}{}/sendLivePhoto", self.api_url, self.bot_token);
-        self.send_multipart_with_retry("Failed to send live photo:", &endpoint, || {
-            let photo_reader =
-                utils::progress_reader_for_path(&photo_item.path, &photo_item.file_name)?;
-            let video_reader =
-                utils::progress_reader_for_path(&video_item.path, &video_item.file_name)?;
-
-            let mut fresh_form = multipart::Form::new()
-                .part(
-                    "photo",
-                    multipart::Part::reader(photo_reader).file_name(photo_item.file_name.clone()),
-                )
-                .part(
-                    "live_photo",
-                    multipart::Part::reader(video_reader).file_name(video_item.file_name.clone()),
-                );
-
-            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
-
-            if let Some(id) = thread_id {
-                fresh_form = fresh_form.text("message_thread_id", id.to_string());
-            }
-
-            if let Some(metadata) = video_item.metadata.as_ref() {
-                if let utils::MediaMetadata::Video(video_meta) = metadata {
-                    if let Some(duration) = video_meta.duration {
-                        fresh_form = fresh_form.text("duration", duration.to_string());
-                    }
-                }
-            }
-
-            if let Some(caption) = caption {
-                fresh_form = fresh_form.text("caption", caption.to_string());
-            }
-            if let Some(markup) = reply_markup {
-                fresh_form = fresh_form.text("reply_markup", markup.to_string());
-            }
-            if spoiler {
-                fresh_form = fresh_form.text("has_spoiler", "true".to_string());
-            }
-
-            Ok(fresh_form)
-        })?;
-
-        let target = self.target_label(thread_id);
-        log_info!(
-            "Live photo sent to {}: {} + {}",
-            target,
-            photo_item.file_name,
-            video_item.file_name
-        );
-        Ok(())
-    }
-
-    fn send_single_media(
-        &self,
-        chat_id: &str,
-        item: &MediaItem,
-        caption: Option<&str>,
-        reply_markup: Option<&str>,
-        spoiler: bool,
-        streaming: bool,
-        thread_id: Option<i64>,
-    ) -> Result<()> {
-        let endpoint = format!(
-            "{}{}/send{}",
-            self.api_url,
-            self.bot_token,
-            utils::capitalize(&item.media_type)
-        );
-        self.send_multipart_with_retry("Failed to send media file:", &endpoint, || {
-            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
-
-            let mut fresh_form = multipart::Form::new().part(
-                item.media_type.clone(),
-                multipart::Part::reader(reader).file_name(item.file_name.clone()),
-            );
-
-            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
-
-            if let Some(id) = thread_id {
-                fresh_form = fresh_form.text("message_thread_id", id.to_string());
-            }
-
-            if streaming && item.media_type == "video" {
-                fresh_form = fresh_form.text("supports_streaming", "true");
-            }
-
-            if let Some(metadata) = item.metadata.as_ref() {
-                match metadata {
-                    utils::MediaMetadata::Video(video_meta) => {
-                        if let Some(duration) = video_meta.duration {
-                            fresh_form = fresh_form.text("duration", duration.to_string());
-                        }
-                        if let Some(width) = video_meta.width {
-                            fresh_form = fresh_form.text("width", width.to_string());
-                        }
-                        if let Some(height) = video_meta.height {
-                            fresh_form = fresh_form.text("height", height.to_string());
-                        }
-                        if let Some(bytes) = video_meta.thumbnail.as_ref() {
-                            let part = multipart::Part::bytes(bytes.clone())
-                                .file_name("thumbnail.jpg")
-                                .mime_str("image/jpeg")?;
-                            fresh_form = fresh_form.part("thumbnail", part);
-                        }
-                    }
-                    utils::MediaMetadata::Photo { thumbnail } => {
-                        if let Some(bytes) = thumbnail.as_ref() {
-                            let part = multipart::Part::bytes(bytes.clone())
-                                .file_name("thumbnail.jpg")
-                                .mime_str("image/jpeg")?;
-                            fresh_form = fresh_form.part("thumbnail", part);
-                        }
-                    }
-                }
-            }
-
-            if let Some(caption) = caption {
-                fresh_form = fresh_form.text("caption", caption.to_string());
-            }
-            if let Some(markup) = reply_markup {
-                fresh_form = fresh_form.text("reply_markup", markup.to_string());
-            }
-            if spoiler && matches!(item.media_type.as_str(), "photo" | "video") {
-                fresh_form = fresh_form.text("has_spoiler", "true".to_string());
-            }
-
-            Ok(fresh_form)
-        })?;
-
-        let target = self.target_label(thread_id);
-        log_info!("Single media file sent to {}: {}", target, item.file_name);
-        Ok(())
-    }
-
     fn send_chat_action(&mut self, chat_id: &str, action: &str, thread_id: Option<i64>) {
         self.chat_name = "Unknown".to_string();
 
@@ -1035,7 +570,7 @@ impl SendTg {
         let status = response.status();
         let text = response.text().unwrap_or_default();
         if status.is_success() {
-            if let Ok(chat_info) = serde_json::from_str::<ChatResponse>(&text) {
+            if let Ok(chat_info) = serde_json::from_str::<types::ChatResponse>(&text) {
                 if chat_info.ok {
                     if let Some(result) = chat_info.result {
                         if let Some(title) = result.title {
@@ -1089,13 +624,13 @@ impl SendTg {
         let mut rng = StdRng::from_entropy();
         let action = actions[rng.gen_range(0..actions.len())];
 
-        let mut payload = json!({
+        let mut payload = serde_json::json!({
             "chat_id": chat_id,
             "action": action,
         });
 
         if let Some(id) = thread_id {
-            payload["message_thread_id"] = json!(id);
+            payload["message_thread_id"] = serde_json::json!(id);
         }
 
         let url = format!("{}{}/sendChatAction", self.api_url, self.bot_token);
@@ -1159,7 +694,7 @@ impl SendTg {
         }
     }
 
-    fn send_multipart_with_retry<F>(
+    pub(super) fn send_multipart_with_retry<F>(
         &self,
         context: &str,
         endpoint: &str,
@@ -1253,52 +788,4 @@ impl SendTg {
 
         None
     }
-}
-
-#[derive(Serialize)]
-struct InputMedia {
-    #[serde(rename = "type")]
-    media_type: String,
-    media: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    caption: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    has_spoiler: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    width: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    height: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thumbnail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    supports_streaming: Option<bool>,
-}
-
-#[derive(serde::Deserialize)]
-struct ChatResponse {
-    ok: bool,
-    result: Option<ChatResult>,
-    description: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct ChatResult {
-    title: Option<String>,
-    #[serde(rename = "first_name")]
-    first_name: Option<String>,
-    #[serde(rename = "last_name")]
-    last_name: Option<String>,
-}
-
-#[derive(Clone)]
-struct MediaItem {
-    media_type: String,
-    file_name: String,
-    path: PathBuf,
-    caption: Option<String>,
-    spoiler: bool,
-    metadata: Option<utils::MediaMetadata>,
-    part_name: String,
 }

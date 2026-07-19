@@ -1,13 +1,7 @@
-mod args;
-mod config;
-mod logger;
-mod telegram;
-mod utils;
-
-use crate::args::{Args, ParsedArgs, SetupArgs};
-use crate::config::FileConfig;
-use crate::telegram::SendTg;
 use anyhow::{Context, Result, anyhow};
+use sendtg::args::{Args, ParsedArgs, SetupArgs};
+use sendtg::config::FileConfig;
+use sendtg::telegram::SendTg;
 use std::io::{self, Write};
 use std::process;
 
@@ -80,7 +74,7 @@ fn ensure_value(target: &mut Option<String>, provided: Option<String>, label: &s
 }
 
 fn handle_setup(setup_args: SetupArgs) -> Result<()> {
-    let mut existing: FileConfig = crate::config::load_config()?.unwrap_or_default();
+    let mut existing: FileConfig = sendtg::config::load_config()?.unwrap_or_default();
 
     existing.api_url = normalize_option(existing.api_url);
     existing.bot_token = normalize_option(existing.bot_token);
@@ -104,22 +98,22 @@ fn handle_setup(setup_args: SetupArgs) -> Result<()> {
         return Err(anyhow!("Chat ID is required for setup"));
     }
 
-    let path = crate::config::write_config(&existing)?;
-    log_info!("Configuration saved to {}", path.display());
+    let path = sendtg::config::write_config(&existing)?;
+    println!("[INFO] Configuration saved to {}", path.display());
     Ok(())
 }
 
 fn handle_show_config() -> Result<()> {
-    let path = crate::config::config_file_path()?;
+    let path = sendtg::config::config_file_path()?;
     println!("Configuration file: {}", path.display());
 
-    match crate::config::load_config()? {
+    match sendtg::config::load_config()? {
         Some(cfg) => {
             let api_url = cfg.api_url.as_deref().unwrap_or("<not set>");
             let bot_token = cfg
                 .bot_token
                 .as_ref()
-                .map(|token| crate::utils::redact_token(token))
+                .map(|token| sendtg::utils::redact_token(token))
                 .unwrap_or_else(|| "<not set>".to_string());
             let chat_id = cfg.chat_id.as_deref().unwrap_or("<not set>");
 
@@ -137,7 +131,7 @@ fn handle_show_config() -> Result<()> {
 
 fn main() {
     if let Err(err) = run() {
-        log_error!("{}", err);
+        eprintln!("[ERROR] {}", err);
         process::exit(1);
     }
 }

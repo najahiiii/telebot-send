@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-pub(crate) fn redact_token(token: &str) -> String {
+pub fn redact_token(token: &str) -> String {
     if token.len() <= 10 {
         return "REDACTED".to_string();
     }
