@@ -72,6 +72,17 @@ struct Cli {
         help = "Send media as documents."
     )]
     as_file: bool,
+    #[arg(
+        long = "video-note",
+        alias = "video_note",
+        help = "Send video files as round video notes."
+    )]
+    video_note: bool,
+    #[arg(
+        long = "voice",
+        help = "Convert audio files to OGG/OPUS and send as voice messages (requires ffmpeg)."
+    )]
+    voice: bool,
     #[arg(short = 'C', long = "caption", help = "Caption to reuse across media.")]
     caption: Option<String>,
     #[arg(
@@ -124,6 +135,8 @@ pub struct Args {
     pub delay_secs: Option<u64>,
     pub no_group: bool,
     pub as_file: bool,
+    pub video_note: bool,
+    pub voice: bool,
     pub caption: Option<String>,
     pub buttons: Vec<ButtonSpec>,
     pub message: Option<String>,
@@ -226,6 +239,8 @@ impl Args {
             delay_secs: cli.delay_secs,
             no_group: cli.no_group,
             as_file: cli.as_file,
+            video_note: cli.video_note,
+            voice: cli.voice,
             caption: cli.caption.clone(),
             buttons,
             message: cli.message.clone(),

@@ -1,5 +1,5 @@
 use crate::args::ButtonSpec;
-use crate::{log_debug, log_info};
+use crate::{log_debug, log_error, log_info};
 use anyhow::{Context, anyhow};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use mime_guess::MimeGuess;
@@ -7,7 +7,7 @@ use rand::Rng;
 use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{self, ErrorKind, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -37,11 +37,90 @@ pub(crate) fn detect_mime_type(path: &Path) -> Option<String> {
 
 pub(crate) fn determine_media_type(mime_type: Option<&str>) -> &'static str {
     match mime_type {
+        Some(mt) if mt == "image/gif" => "animation",
         Some(mt) if mt.starts_with("image/") => "photo",
         Some(mt) if mt.starts_with("video/") => "video",
+        Some(mt) if mt == "audio/ogg" || mt == "audio/ogg; codecs=opus" => "voice",
         Some(mt) if mt.starts_with("audio/") => "audio",
         _ => "document",
     }
+}
+
+pub(crate) fn is_animation(mime_type: Option<&str>) -> bool {
+    matches!(mime_type, Some(mt) if mt == "image/gif")
+}
+
+pub(crate) fn is_ogg(mime_type: Option<&str>) -> bool {
+    matches!(mime_type, Some(mt) if mt == "audio/ogg" || mt == "audio/ogg; codecs=opus")
+}
+
+pub(crate) fn convert_to_ogg(input_path: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let input_str = match input_path.to_str() {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let output_path = input_path.with_extension("ogg");
+    let output_str = match output_path.to_str() {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    log_info!("Converting {} to OGG/OPUS...", input_path.display());
+
+    let output = match Command::new("ffmpeg")
+        .arg("-v")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(input_str)
+        .arg("-c:a")
+        .arg("libopus")
+        .arg("-b:a")
+        .arg("48k")
+        .arg("-ar")
+        .arg("48000")
+        .arg("-ac")
+        .arg("1")
+        .arg("-application")
+        .arg("voip")
+        .arg(output_str)
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                log_debug!("ffmpeg not found; cannot convert to OGG.");
+                return Ok(None);
+            }
+            return Err(anyhow!(err).context("Failed to spawn ffmpeg for OGG conversion"));
+        }
+    };
+
+    if !output.status.success() {
+        log_error!(
+            "ffmpeg OGG conversion failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(None);
+    }
+
+    if !output_path.exists() {
+        log_error!("ffmpeg completed but output file not found: {}", output_str);
+        return Ok(None);
+    }
+
+    let file_size = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    log_info!(
+        "OGG conversion successful: {} ({} bytes)",
+        output_path.display(),
+        file_size
+    );
+
+    Ok(Some(output_path))
 }
 
 pub(crate) fn create_reply_markup(buttons: &[ButtonSpec]) -> Option<Value> {
@@ -357,6 +436,196 @@ pub fn extract_video_metadata(path: &Path) -> anyhow::Result<Option<VideoMetadat
         height,
         thumbnail,
     }))
+}
+
+pub fn extract_audio_duration(path: &Path) -> anyhow::Result<Option<u64>> {
+    let path_str = match path.to_str() {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let ffprobe_output = match Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("json")
+        .arg(path_str)
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                log_debug!("ffprobe not found; cannot extract audio duration.");
+                return Ok(None);
+            }
+            return Err(anyhow!(err).context("Failed to spawn ffprobe for audio duration"));
+        }
+    };
+
+    if !ffprobe_output.status.success() {
+        log_debug!(
+            "ffprobe failed for audio duration {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&ffprobe_output.stderr)
+        );
+        return Ok(None);
+    }
+
+    let value: Value = serde_json::from_slice(&ffprobe_output.stdout)
+        .context("Failed to parse ffprobe JSON output")?;
+
+    let duration_secs = value
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(|v| {
+            if let Some(n) = v.as_f64() {
+                Some(n)
+            } else if let Some(s) = v.as_str() {
+                s.parse::<f64>().ok()
+            } else {
+                None
+            }
+        });
+
+    match duration_secs {
+        Some(d) if d.is_finite() && d >= 0.0 => Ok(Some(d.floor() as u64)),
+        _ => Ok(None),
+    }
+}
+
+pub fn compress_video_for_note(
+    input_path: &Path,
+    max_bytes: u64,
+    total_duration: Option<u64>,
+) -> anyhow::Result<Option<PathBuf>> {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let input_str = match input_path.to_str() {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let output_path = input_path.with_extension("note.mp4");
+    let output_str = match output_path.to_str() {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let file_size = std::fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
+    if file_size <= max_bytes {
+        return Ok(None);
+    }
+
+    let max_mb = max_bytes / (1024 * 1024);
+    let input_mb = file_size / (1024 * 1024);
+    log_info!(
+        "Video {}MB exceeds {}MB limit, compressing for video note...",
+        input_mb,
+        max_mb
+    );
+
+    let mut child = match Command::new("ffmpeg")
+        .arg("-v")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(input_str)
+        .arg("-t")
+        .arg("60")
+        .arg("-vf")
+        .arg("scale=360:360:force_original_aspect_ratio=decrease,pad=360:360:(ow-iw)/2:(oh-ih)/2")
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-preset")
+        .arg("fast")
+        .arg("-crf")
+        .arg("28")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-an")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg("-progress")
+        .arg("pipe:1")
+        .arg(output_str)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                log_debug!("ffmpeg not found; cannot compress video for note.");
+                return Ok(None);
+            }
+            return Err(anyhow!(err).context("Failed to spawn ffmpeg for video note compression"));
+        }
+    };
+
+    let max_secs = total_duration.unwrap_or(60).min(60);
+    let progress = ProgressBar::new(max_secs);
+    progress.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} Compressing video note [{bar:30.cyan/blue}] {pos}/{len}s ({eta})",
+        )
+        .unwrap()
+        .progress_chars("#>-")
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
+    );
+    progress.enable_steady_tick(Duration::from_millis(200));
+
+    if let Some(ref mut stdout) = child.stdout {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if let Some(val) = line.strip_prefix("out_time_us=") {
+                    if let Ok(us) = val.trim().parse::<u64>() {
+                        let secs = us / 1_000_000;
+                        progress.set_position(secs.min(max_secs));
+                    }
+                }
+            }
+        }
+    }
+
+    let status = child.wait();
+    progress.finish_and_clear();
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            log_error!("ffmpeg exited with status: {}", s);
+            return Ok(None);
+        }
+        Err(err) => {
+            log_error!("ffmpeg wait failed: {}", err);
+            return Ok(None);
+        }
+    }
+
+    if !output_path.exists() {
+        log_error!("ffmpeg completed but output file not found: {}", output_str);
+        return Ok(None);
+    }
+
+    let compressed_size = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let compressed_mb = compressed_size / (1024 * 1024);
+
+    log_info!(
+        "Video note compressed: {}MB → {}MB ({})",
+        input_mb,
+        compressed_mb,
+        output_path.display()
+    );
+
+    Ok(Some(output_path))
 }
 
 pub fn extract_photo_metadata(path: &Path) -> anyhow::Result<Option<Option<Vec<u8>>>> {

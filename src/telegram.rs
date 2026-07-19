@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const PHOTO_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const VIDEO_NOTE_MAX_BYTES: u64 = 12 * 1024 * 1024;
 
 pub struct SendTg {
     api_url: String,
@@ -74,6 +75,8 @@ impl SendTg {
                 &args.media_paths,
                 args.caption.as_deref(),
                 args.as_file,
+                args.video_note,
+                args.voice,
                 args.no_group,
                 &args.buttons,
                 args.spoiler,
@@ -151,6 +154,8 @@ impl SendTg {
         media_paths: &[PathBuf],
         caption: Option<&str>,
         as_file: bool,
+        video_note: bool,
+        voice: bool,
         no_group: bool,
         buttons: &[ButtonSpec],
         spoiler: bool,
@@ -186,17 +191,51 @@ impl SendTg {
             let mime_type = utils::detect_mime_type(path);
             let mut media_type = if as_file {
                 "document"
+            } else if video_note
+                && matches!(mime_type.as_deref(), Some(mt) if mt.starts_with("video/"))
+            {
+                "video_note"
             } else {
                 utils::determine_media_type(mime_type.as_deref())
             };
 
-            if !matches!(media_type, "photo" | "video" | "audio" | "document") {
+            if !matches!(
+                media_type,
+                "photo" | "video" | "audio" | "document" | "animation" | "voice" | "video_note"
+            ) {
                 log_error!(
                     "Unsupported media type for {}: {}",
                     path.display(),
                     media_type
                 );
                 continue;
+            }
+
+            let mut converted_path: Option<PathBuf> = None;
+            if voice && !utils::is_ogg(mime_type.as_deref()) {
+                match utils::convert_to_ogg(path) {
+                    Ok(Some(ogg_path)) => {
+                        converted_path = Some(ogg_path.clone());
+                        media_type = "voice";
+                        log_info!("File will be sent as voice message: {}", ogg_path.display());
+                    }
+                    Ok(None) => {
+                        log_info!(
+                            "OGG conversion not available, sending as {} : {}",
+                            media_type,
+                            path.display()
+                        );
+                    }
+                    Err(err) => {
+                        log_error!(
+                            "Failed to convert to OGG: {}. Sending as {}.",
+                            err,
+                            media_type
+                        );
+                    }
+                }
+            } else if voice && utils::is_ogg(mime_type.as_deref()) {
+                media_type = "voice";
             }
 
             if media_type == "photo" {
@@ -220,11 +259,33 @@ impl SendTg {
 
             let is_video_file =
                 matches!(mime_type.as_deref(), Some(mt) if mt.starts_with("video/"));
-            let is_image_file =
-                matches!(mime_type.as_deref(), Some(mt) if mt.starts_with("image/"));
+            let is_animation_file = utils::is_animation(mime_type.as_deref());
+            let is_image_file = matches!(mime_type.as_deref(), Some(mt) if mt.starts_with("image/") && mt != "image/gif");
 
-            let metadata = if is_video_file {
-                log_info!("Extracting video metadata from {}", path.display());
+            let metadata = if media_type == "voice" && converted_path.is_some() {
+                let ogg_path = converted_path.as_ref().unwrap();
+                log_info!("Extracting audio duration from: {}", ogg_path.display());
+                match utils::extract_audio_duration(ogg_path) {
+                    Ok(Some(duration)) => {
+                        log_info!("Audio duration: {}s", duration);
+                        Some(utils::MediaMetadata::Video(utils::VideoMetadata {
+                            duration: Some(duration),
+                            width: None,
+                            height: None,
+                            thumbnail: None,
+                        }))
+                    }
+                    Ok(None) => {
+                        log_debug!("No duration found in OGG file");
+                        None
+                    }
+                    Err(err) => {
+                        log_debug!("Failed to extract audio duration: {}", err);
+                        None
+                    }
+                }
+            } else if is_video_file || is_animation_file {
+                log_info!("Extracting metadata from {}", path.display());
                 match utils::extract_video_metadata(path) {
                     Ok(meta) => {
                         if meta.is_some() {
@@ -283,15 +344,24 @@ impl SendTg {
             }
 
             let part_name = format!("file{}", media_items.len());
+            let effective_path = converted_path.as_ref().unwrap_or(path);
+            let effective_name = if converted_path.is_some() {
+                effective_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("voice.ogg")
+                    .to_string()
+            } else {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("media")
+                    .to_string()
+            };
 
             media_items.push(MediaItem {
                 media_type: media_type.to_string(),
-                file_name: path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("media")
-                    .to_string(),
-                path: path.clone(),
+                file_name: effective_name,
+                path: effective_path.clone(),
                 caption: caption_for_item,
                 spoiler: spoiler && matches!(media_type, "photo" | "video"),
                 metadata,
@@ -305,7 +375,77 @@ impl SendTg {
 
         let mut index = 0;
         while index < media_items.len() {
-            if media_items[index].media_type == "document" {
+            let current_type = media_items[index].media_type.as_str();
+
+            if current_type == "animation" {
+                let item = &media_items[index];
+                self.send_chat_action(chat_id, "upload_document", thread_id);
+                let caption_to_use = item.caption.as_deref().or(caption);
+                maybe_delay(send_calls);
+                self.send_animation(
+                    chat_id,
+                    item,
+                    caption_to_use,
+                    reply_markup_text.as_deref(),
+                    item.spoiler,
+                    thread_id,
+                )?;
+                send_calls += 1;
+                index += 1;
+                continue;
+            }
+
+            if current_type == "voice" {
+                let item = &media_items[index];
+                self.send_chat_action(chat_id, "upload_voice", thread_id);
+                let caption_to_use = item.caption.as_deref().or(caption);
+                maybe_delay(send_calls);
+                self.send_voice(
+                    chat_id,
+                    item,
+                    caption_to_use,
+                    reply_markup_text.as_deref(),
+                    thread_id,
+                )?;
+                send_calls += 1;
+                index += 1;
+                continue;
+            }
+
+            if current_type == "video_note" {
+                let item = &media_items[index];
+                self.send_chat_action(chat_id, "upload_video_note", thread_id);
+                maybe_delay(send_calls);
+                self.send_video_note(chat_id, item, reply_markup_text.as_deref(), thread_id)?;
+                send_calls += 1;
+                index += 1;
+                continue;
+            }
+
+            if current_type == "photo"
+                && index + 1 < media_items.len()
+                && media_items[index + 1].media_type == "video"
+            {
+                let photo_item = &media_items[index];
+                let video_item = &media_items[index + 1];
+                self.send_chat_action(chat_id, "upload_photo", thread_id);
+                let caption_to_use = photo_item.caption.as_deref().or(caption);
+                maybe_delay(send_calls);
+                self.send_live_photo(
+                    chat_id,
+                    photo_item,
+                    video_item,
+                    caption_to_use,
+                    reply_markup_text.as_deref(),
+                    photo_item.spoiler,
+                    thread_id,
+                )?;
+                send_calls += 1;
+                index += 2;
+                continue;
+            }
+
+            if current_type == "document" {
                 if no_group {
                     let item = &media_items[index];
                     self.send_chat_action(chat_id, "upload_document", thread_id);
@@ -372,13 +512,17 @@ impl SendTg {
             let mut chunk_indices = Vec::new();
             while index < media_items.len()
                 && chunk_indices.len() < 10
-                && media_items[index].media_type != "document"
+                && !matches!(
+                    media_items[index].media_type.as_str(),
+                    "document" | "animation" | "voice" | "video_note"
+                )
             {
                 chunk_indices.push(index);
                 index += 1;
             }
 
             if chunk_indices.is_empty() {
+                index += 1;
                 continue;
             }
 
@@ -510,6 +654,265 @@ impl SendTg {
 
         let target = self.target_label(thread_id);
         log_info!("{} items sent to {} as media group", items.len(), target);
+        Ok(())
+    }
+
+    fn send_animation(
+        &self,
+        chat_id: &str,
+        item: &MediaItem,
+        caption: Option<&str>,
+        reply_markup: Option<&str>,
+        spoiler: bool,
+        thread_id: Option<i64>,
+    ) -> Result<()> {
+        let endpoint = format!("{}{}/sendAnimation", self.api_url, self.bot_token);
+        self.send_multipart_with_retry("Failed to send animation:", &endpoint, || {
+            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
+
+            let mut fresh_form = multipart::Form::new().part(
+                "animation",
+                multipart::Part::reader(reader).file_name(item.file_name.clone()),
+            );
+
+            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
+
+            if let Some(id) = thread_id {
+                fresh_form = fresh_form.text("message_thread_id", id.to_string());
+            }
+
+            if let Some(metadata) = item.metadata.as_ref() {
+                if let utils::MediaMetadata::Video(video_meta) = metadata {
+                    if let Some(duration) = video_meta.duration {
+                        fresh_form = fresh_form.text("duration", duration.to_string());
+                    }
+                    if let Some(width) = video_meta.width {
+                        fresh_form = fresh_form.text("width", width.to_string());
+                    }
+                    if let Some(height) = video_meta.height {
+                        fresh_form = fresh_form.text("height", height.to_string());
+                    }
+                    if let Some(bytes) = video_meta.thumbnail.as_ref() {
+                        let part = multipart::Part::bytes(bytes.clone())
+                            .file_name("thumbnail.jpg")
+                            .mime_str("image/jpeg")?;
+                        fresh_form = fresh_form.part("thumbnail", part);
+                    }
+                }
+            }
+
+            if let Some(caption) = caption {
+                fresh_form = fresh_form.text("caption", caption.to_string());
+            }
+            if let Some(markup) = reply_markup {
+                fresh_form = fresh_form.text("reply_markup", markup.to_string());
+            }
+            if spoiler {
+                fresh_form = fresh_form.text("has_spoiler", "true".to_string());
+            }
+
+            Ok(fresh_form)
+        })?;
+
+        let target = self.target_label(thread_id);
+        log_info!("Animation sent to {}: {}", target, item.file_name);
+        Ok(())
+    }
+
+    fn send_voice(
+        &self,
+        chat_id: &str,
+        item: &MediaItem,
+        caption: Option<&str>,
+        reply_markup: Option<&str>,
+        thread_id: Option<i64>,
+    ) -> Result<()> {
+        let endpoint = format!("{}{}/sendVoice", self.api_url, self.bot_token);
+        self.send_multipart_with_retry("Failed to send voice:", &endpoint, || {
+            let reader = utils::progress_reader_for_path(&item.path, &item.file_name)?;
+
+            let mut fresh_form = multipart::Form::new().part(
+                "voice",
+                multipart::Part::reader(reader).file_name(item.file_name.clone()),
+            );
+
+            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
+
+            if let Some(id) = thread_id {
+                fresh_form = fresh_form.text("message_thread_id", id.to_string());
+            }
+
+            if let Some(metadata) = item.metadata.as_ref() {
+                if let utils::MediaMetadata::Video(video_meta) = metadata {
+                    if let Some(duration) = video_meta.duration {
+                        fresh_form = fresh_form.text("duration", duration.to_string());
+                        log_debug!("Voice duration: {}s", duration);
+                    }
+                }
+            }
+
+            if let Some(caption) = caption {
+                fresh_form = fresh_form.text("caption", caption.to_string());
+            }
+            if let Some(markup) = reply_markup {
+                fresh_form = fresh_form.text("reply_markup", markup.to_string());
+            }
+
+            Ok(fresh_form)
+        })?;
+
+        let target = self.target_label(thread_id);
+        log_info!("Voice message sent to {}: {}", target, item.file_name);
+        Ok(())
+    }
+
+    fn send_video_note(
+        &self,
+        chat_id: &str,
+        item: &MediaItem,
+        reply_markup: Option<&str>,
+        thread_id: Option<i64>,
+    ) -> Result<()> {
+        let file_size = std::fs::metadata(&item.path).map(|m| m.len()).unwrap_or(0);
+        let effective_path = if file_size > VIDEO_NOTE_MAX_BYTES {
+            let duration = item.metadata.as_ref().and_then(|m| match m {
+                utils::MediaMetadata::Video(v) => v.duration,
+                _ => None,
+            });
+            match utils::compress_video_for_note(&item.path, VIDEO_NOTE_MAX_BYTES, duration) {
+                Ok(Some(compressed)) => compressed,
+                Ok(None) => item.path.clone(),
+                Err(err) => {
+                    log_error!("Failed to compress video for note: {}", err);
+                    item.path.clone()
+                }
+            }
+        } else {
+            item.path.clone()
+        };
+
+        let effective_name = effective_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&item.file_name)
+            .to_string();
+
+        let endpoint = format!("{}{}/sendVideoNote", self.api_url, self.bot_token);
+        self.send_multipart_with_retry("Failed to send video note:", &endpoint, || {
+            let reader = utils::progress_reader_for_path(&effective_path, &effective_name)?;
+
+            let mut fresh_form = multipart::Form::new().part(
+                "video_note",
+                multipart::Part::reader(reader).file_name(effective_name.clone()),
+            );
+
+            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
+
+            if let Some(id) = thread_id {
+                fresh_form = fresh_form.text("message_thread_id", id.to_string());
+            }
+
+            if let Some(metadata) = item.metadata.as_ref() {
+                if let utils::MediaMetadata::Video(video_meta) = metadata {
+                    if let Some(duration) = video_meta.duration {
+                        let capped = duration.min(60);
+                        fresh_form = fresh_form.text("duration", capped.to_string());
+                    }
+                    if let Some(bytes) = video_meta.thumbnail.as_ref() {
+                        let part = multipart::Part::bytes(bytes.clone())
+                            .file_name("thumbnail.jpg")
+                            .mime_str("image/jpeg")?;
+                        fresh_form = fresh_form.part("thumbnail", part);
+                    }
+                }
+            }
+
+            let length = if effective_path != item.path {
+                360
+            } else {
+                item.metadata
+                    .as_ref()
+                    .and_then(|m| match m {
+                        utils::MediaMetadata::Video(v) => v.width.or(v.height),
+                        _ => None,
+                    })
+                    .unwrap_or(360)
+            };
+            fresh_form = fresh_form.text("length", length.to_string());
+
+            if let Some(markup) = reply_markup {
+                fresh_form = fresh_form.text("reply_markup", markup.to_string());
+            }
+
+            Ok(fresh_form)
+        })?;
+
+        let target = self.target_label(thread_id);
+        log_info!("Video note sent to {}: {}", target, item.file_name);
+        Ok(())
+    }
+
+    fn send_live_photo(
+        &self,
+        chat_id: &str,
+        photo_item: &MediaItem,
+        video_item: &MediaItem,
+        caption: Option<&str>,
+        reply_markup: Option<&str>,
+        spoiler: bool,
+        thread_id: Option<i64>,
+    ) -> Result<()> {
+        let endpoint = format!("{}{}/sendLivePhoto", self.api_url, self.bot_token);
+        self.send_multipart_with_retry("Failed to send live photo:", &endpoint, || {
+            let photo_reader =
+                utils::progress_reader_for_path(&photo_item.path, &photo_item.file_name)?;
+            let video_reader =
+                utils::progress_reader_for_path(&video_item.path, &video_item.file_name)?;
+
+            let mut fresh_form = multipart::Form::new()
+                .part(
+                    "photo",
+                    multipart::Part::reader(photo_reader).file_name(photo_item.file_name.clone()),
+                )
+                .part(
+                    "live_photo",
+                    multipart::Part::reader(video_reader).file_name(video_item.file_name.clone()),
+                );
+
+            fresh_form = fresh_form.text("chat_id", chat_id.to_string());
+
+            if let Some(id) = thread_id {
+                fresh_form = fresh_form.text("message_thread_id", id.to_string());
+            }
+
+            if let Some(metadata) = video_item.metadata.as_ref() {
+                if let utils::MediaMetadata::Video(video_meta) = metadata {
+                    if let Some(duration) = video_meta.duration {
+                        fresh_form = fresh_form.text("duration", duration.to_string());
+                    }
+                }
+            }
+
+            if let Some(caption) = caption {
+                fresh_form = fresh_form.text("caption", caption.to_string());
+            }
+            if let Some(markup) = reply_markup {
+                fresh_form = fresh_form.text("reply_markup", markup.to_string());
+            }
+            if spoiler {
+                fresh_form = fresh_form.text("has_spoiler", "true".to_string());
+            }
+
+            Ok(fresh_form)
+        })?;
+
+        let target = self.target_label(thread_id);
+        log_info!(
+            "Live photo sent to {}: {} + {}",
+            target,
+            photo_item.file_name,
+            video_item.file_name
+        );
         Ok(())
     }
 

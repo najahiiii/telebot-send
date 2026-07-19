@@ -5,7 +5,8 @@ It supports both the official API endpoint and self-hosted [`telegram-bot-api`](
 
 ## Features
 
-- Send text messages or upload photos, videos, audio, and documents (Up To 2000MB if using self-hosted [`telegram-bot-api`](https://github.com/tdlib/telegram-bot-api) servers).
+- Send text messages or upload photos, videos, audio, documents, animations (GIF), voice messages, and video notes (Up To 2000MB if using self-hosted [`telegram-bot-api`](https://github.com/tdlib/telegram-bot-api) servers).
+- Auto-convert audio files to OGG/OPUS voice messages via `ffmpeg` with `--voice` flag.
 - Automatically group media (up to 10 items) or send individually with `--no-group`.
 - Auto-convert large photos (>10 MB) to documents while keeping thumbnails.
 - Generate video/photo thumbnails and metadata via `ffprobe`/`ffmpeg` (if available).
@@ -71,6 +72,8 @@ Use `./target/release/sendtg --show-config` to print the stored values.
 | `--delay <SECONDS>`         | Pause between media requests (seconds) to ease Telegram rate limits.      |
 | `--no-group`                | Send each media item individually (disables media albums).                |
 | `-F`, `--as-file`           | Force media to be sent as documents.                                      |
+| `--video-note`              | Send video files as round video notes.                                    |
+| `--voice`                   | Convert audio to OGG/OPUS and send as voice message (requires ffmpeg).    |
 | `-C`, `--caption <TEXT>`    | Caption applied to the first media item.                                  |
 | `--button "LABEL\|URL"`     | Add an inline button; repeat for multiple buttons.                        |
 | `--button-row-break`        | Start a new inline keyboard row (use between `--button` flags).           |
